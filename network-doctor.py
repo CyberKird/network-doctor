@@ -10,6 +10,8 @@ import json
 import base64
 import platform
 import re
+import time
+import urllib.request
 
 IS_WIN = os.name == "nt"
 IS_MAC = platform.system() == "Darwin"
@@ -55,6 +57,9 @@ PING_TARGETS_BASE = [
     ("google.com",     "google.com"),
 ]
 
+# Commands that require admin on Windows
+_WIN_NEEDS_ADMIN = {"ip_renew", "winsock", "adapter_restart", "net_reset"}
+
 
 def _detect_router_ip():
     try:
@@ -81,6 +86,15 @@ def _detect_router_ip():
     except Exception:
         pass
     return "192.168.0.1"
+
+
+def _is_admin():
+    try:
+        if IS_WIN:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        return os.geteuid() == 0
+    except Exception:
+        return False
 
 
 def _load_config():
@@ -155,7 +169,6 @@ def _get_active_adapter():
 
 
 def _get_mac_network_service(iface):
-    """Map an interface name (e.g. en0) to its macOS Network Service name."""
     try:
         out = subprocess.check_output("networksetup -listnetworkserviceorder",
                                       shell=True, text=True, timeout=5,
@@ -178,6 +191,7 @@ class NetworkDoctor(ctk.CTk):
         self._running = False
         self._router_ip = _detect_router_ip()
         self._ping_targets = [("Router", self._router_ip)] + PING_TARGETS_BASE
+        self._last_ip_info = ""
 
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
@@ -220,9 +234,7 @@ class NetworkDoctor(ctk.CTk):
             fg_color=C_S1, corner_radius=4, padx=7, pady=3,
         ).pack(side="left", padx=10)
 
-        os_label = {"nt": "Windows", "Darwin": "macOS"}.get(
-            platform.system() if not IS_WIN else "nt", "Linux"
-        )
+        os_label = "Windows" if IS_WIN else ("macOS" if IS_MAC else "Linux")
         ctk.CTkLabel(
             header, text=f"Diagnose & fix your internet  ·  {os_label}",
             font=ctk.CTkFont(size=11), text_color=C_OV1,
@@ -253,6 +265,15 @@ class NetworkDoctor(ctk.CTk):
         )
         self.progress_bar.pack(side="right", padx=14, pady=12)
         self.progress_bar.set(0)
+
+        # Refresh button in status bar
+        ctk.CTkButton(
+            sb, text="↺",
+            command=self._auto_check,
+            width=32, height=28, corner_radius=6,
+            font=ctk.CTkFont(size=14),
+            fg_color=C_S1, hover_color=C_S2, text_color=C_SUB0,
+        ).pack(side="right", padx=(0, 6), pady=12)
 
         # ── Scroll area ──────────────────────────────────────────
         self.scroll = ctk.CTkScrollableFrame(
@@ -347,7 +368,6 @@ class NetworkDoctor(ctk.CTk):
 
         self._divider(c)
 
-        # Password card
         pw_card = ctk.CTkFrame(c, fg_color=C_MANTLE, corner_radius=8)
         pw_card.pack(fill="x")
 
@@ -525,9 +545,17 @@ class NetworkDoctor(ctk.CTk):
         )
         self.btn_diag.pack(side="left")
 
+        ctk.CTkButton(
+            btn_row, text="⚡  Speed Test",
+            command=self._run_speed_test,
+            height=38, corner_radius=8,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=C_MAUVE, hover_color="#b690e5", text_color=C_DARK,
+        ).pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(
             btn_row,
-            text="  Pings targets, checks DNS, shows your IP configuration",
+            text="  Pings targets, checks DNS, shows IP config",
             font=ctk.CTkFont(size=11), text_color=C_OV0, anchor="w",
         ).pack(side="left")
 
@@ -563,16 +591,33 @@ class NetworkDoctor(ctk.CTk):
                 font=ctk.CTkFont(size=10), text_color=C_OV0, anchor="w",
             ).pack(anchor="w")
 
-        # IP info card
+        # IP info card with copy button
         ip_card = ctk.CTkFrame(c, fg_color=C_MANTLE, corner_radius=8)
         ip_card.pack(fill="x")
+
+        ip_toolbar = ctk.CTkFrame(ip_card, fg_color="transparent")
+        ip_toolbar.pack(fill="x", padx=12, pady=(8, 0))
+
+        ctk.CTkLabel(
+            ip_toolbar, text="IP Configuration",
+            font=ctk.CTkFont(size=10, weight="bold"), text_color=C_OV1,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            ip_toolbar, text="Copy",
+            command=self._copy_ip_info,
+            width=50, height=22, corner_radius=5,
+            font=ctk.CTkFont(size=10),
+            fg_color=C_S1, hover_color=C_S2, text_color=C_SUB0,
+        ).pack(side="right")
+
         self.info_label = ctk.CTkLabel(
             ip_card,
             text="Run diagnostics to see your IP configuration",
             font=ctk.CTkFont(family="Consolas", size=10),
             text_color=C_OV0, anchor="w", justify="left",
         )
-        self.info_label.pack(anchor="w", padx=12, pady=10)
+        self.info_label.pack(anchor="w", padx=12, pady=(4, 10))
 
     # ──────────────────────────────────────────────────────────────
     # Log
@@ -680,8 +725,8 @@ class NetworkDoctor(ctk.CTk):
                 f' 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'
                 f' && powercfg /setacvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
                 f' 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'
-                f' && powershell -Command "$a = Get-NetAdapter -Name \'{adapter}\';"'
-                f' "$a | Disable-NetAdapterPowerManagement -Confirm:$false"'
+                f' && powershell -Command "$a = Get-NetAdapter -Name \'{adapter}\';'
+                f' $a | Disable-NetAdapterPowerManagement -Confirm:$false"'
             )
             if _run_as_admin(cmd):
                 self._log(f"[OPTIMIZE] Power saving disabled for '{adapter}'")
@@ -693,8 +738,8 @@ class NetworkDoctor(ctk.CTk):
                 "Adapter Sleep — macOS",
                 "macOS handles adapter power management at the OS level.\n\n"
                 "To reduce random disconnects:\n"
-                "  System Settings → Battery → disable 'Enable Power Nap'\n"
-                "  System Settings → Network → Wi-Fi → uncheck 'Ask to join hotspots'"
+                "  System Settings -> Battery -> disable 'Enable Power Nap'\n"
+                "  System Settings -> Network -> Wi-Fi -> uncheck 'Ask to join hotspots'"
             )
             self._log("[OPTIMIZE] macOS: see System Settings > Battery for sleep options")
 
@@ -768,7 +813,7 @@ class NetworkDoctor(ctk.CTk):
             "Router Reboot Guide",
             "Option A — Via admin panel:\n"
             "  1. Open Router Page\n"
-            "  2. Log in → 'System' or 'Maintenance'\n"
+            "  2. Log in -> 'System' or 'Maintenance'\n"
             "  3. Click 'Reboot' / 'Restart'\n"
             "  4. Wait 2-3 minutes\n\n"
             "Option B — Physically:\n"
@@ -839,8 +884,20 @@ class NetworkDoctor(ctk.CTk):
         cmd, msg = commands.get(fix_type, ("", ""))
         if not cmd:
             return
+
         self._log(f"\n[FIX] {msg}")
         self._set_loading(True)
+
+        # Windows commands that need admin but aren't running elevated yet
+        if IS_WIN and fix_type in _WIN_NEEDS_ADMIN and not _is_admin():
+            self._log("  Requires admin — opening elevated prompt...")
+            if _run_as_admin(cmd):
+                self._log("  Done (check the elevated window for output).\n")
+            else:
+                self._log("  Cancelled or failed to elevate.\n")
+            self.after(0, self._set_loading, False)
+            return
+
         threading.Thread(target=self._exec, args=(cmd,), daemon=True).start()
 
     def _run_all_diags(self):
@@ -851,11 +908,33 @@ class NetworkDoctor(ctk.CTk):
         self._set_loading(True)
         threading.Thread(target=self._diag_worker, daemon=True).start()
 
+    def _run_speed_test(self):
+        self._log("\n[SPEED] Starting download speed test...")
+        self._set_loading(True)
+        threading.Thread(target=self._speed_test_worker, daemon=True).start()
+
+    def _speed_test_worker(self):
+        url = "https://speed.cloudflare.com/__down?bytes=5000000"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "network-doctor/2.0"})
+            t0 = time.perf_counter()
+            with urllib.request.urlopen(req, timeout=20) as r:
+                data = r.read()
+            elapsed = time.perf_counter() - t0
+            mb = len(data) / 1_000_000
+            mbps = (mb * 8) / elapsed
+            self._log(f"[SPEED] {mbps:.1f} Mbps  ({mb:.1f} MB in {elapsed:.1f}s)")
+        except Exception as e:
+            self._log(f"[SPEED] Failed: {e}")
+        finally:
+            self.after(0, self._set_loading, False)
+
     def _diag_worker(self):
         online = self._check_internet()
         self.after(0, self._set_status, online)
 
         info_text = self._collect_ip_info()
+        self._last_ip_info = info_text
         self.after(0, self.info_label.configure, {"text": info_text, "text_color": C_SUB0})
 
         for label, target in self._ping_targets:
@@ -891,6 +970,14 @@ class NetworkDoctor(ctk.CTk):
                 return "\n".join(lines[:30]) if lines else out[:500]
         except Exception as e:
             return f"Could not read network info: {e}"
+
+    def _copy_ip_info(self):
+        if self._last_ip_info:
+            self.clipboard_clear()
+            self.clipboard_append(self._last_ip_info)
+            self._log("[Diag] IP info copied to clipboard")
+        else:
+            self._log("[Diag] Run diagnostics first")
 
     def _auto_check(self):
         threading.Thread(target=self._auto_check_worker, daemon=True).start()

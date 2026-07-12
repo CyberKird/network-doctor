@@ -2,51 +2,43 @@
 
 A desktop app for diagnosing and fixing internet problems without digging through cmd or terminal.
 
-Runs on **Windows**, **Linux**, and **macOS**.
-
-![Catppuccin Mocha theme](.github/screenshot.png)
+![Network Doctor](.github/screenshot.png)
 
 ## What it does
 
-- Checks your connection status on launch
-- Pings your router, Google DNS, Cloudflare, and google.com
+- One-click **Restart Router**: copies your saved admin password to the clipboard and opens the router's admin page at your default gateway
+- Checks your connection status live and pings your router, Google DNS, Cloudflare, and google.com
 - Shows your IP, gateway, and DNS config
-- One-click fixes: flush DNS, renew IP, restart adapter, reset network stack
-- Sets fast DNS (Cloudflare 1.1.1.1 + Google 8.8.8.8) with admin elevation
-- Saves your router admin password locally (base64-encoded, stored in `~/.network-doctor.json`)
+- Download speed test
+- One-click fixes: flush DNS, renew IP, reset Winsock, restart adapter, full network reset
+- Optimizations: fast DNS (Cloudflare 1.1.1.1 + Google 8.8.8.8), disable adapter power-saving
+- Saves your router admin password locally (base64-encoded, stored in `~/.network-doctor.json`) — never bundled with the app or synced anywhere
 - Auto-detects your router IP from the default gateway — no hardcoded addresses
+- Actions that need elevation trigger a UAC prompt only for that action, not for the whole app
 
-## Requirements
+Windows only.
 
-- Python 3.10+
-- `customtkinter` — install with `pip install customtkinter`
+## Download
 
-## Running it
+Grab the latest `Network Doctor.exe` from [Releases](https://github.com/CyberKird/network-doctor/releases) — no Python required, no console window, no install. Double-click to run.
 
-**Windows** — double-click `network-doctor.bat` (runs as admin automatically) or `network-doctor.vbs` (silent, no console window)
+## Running from source
 
-**Linux / macOS:**
 ```bash
-pip3 install customtkinter
-chmod +x run.sh
-./run.sh
+pip install -r requirements.txt
+python network-doctor.py
 ```
 
-Or directly:
+Requires Python 3.10+.
+
+## Building the .exe
+
 ```bash
-python3 network-doctor.py
+pip install pyinstaller
+python build_exe.py
 ```
 
-## Quick fixes by platform
-
-| Fix | Windows | macOS | Linux |
-|-----|---------|-------|-------|
-| Flush DNS | `ipconfig /flushdns` | `dscacheutil -flushcache` | `resolvectl flush-caches` |
-| Renew IP | `ipconfig /release /renew` | `ipconfig set <iface> DHCP` | `dhclient` |
-| Reset network | `netsh winsock reset` | restart mDNSResponder | restart NetworkManager |
-| Restart adapter | PowerShell `Restart-NetAdapter` | `ifconfig down/up` | `ip link down/up` |
-
-Fixes that need admin (DNS setting, adapter power management) trigger a UAC prompt on Windows, `osascript` on macOS, or `pkexec`/terminal sudo on Linux.
+Outputs a single-file, windowless `dist/Network Doctor.exe`.
 
 ## Password storage
 

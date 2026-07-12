@@ -1,88 +1,93 @@
+"""Network Doctor v3 - speedtest-style network utility (Windows)."""
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import messagebox
 from pathlib import Path
 import subprocess
 import threading
 import socket
 import webbrowser
-import os
 import json
 import base64
-import platform
 import re
 import time
+import math
 import urllib.request
 
-IS_WIN = os.name == "nt"
-IS_MAC = platform.system() == "Darwin"
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
 
-if IS_WIN:
-    import ctypes
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        pass
+import atexit
+import ctypes
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    pass
+
+try:
+    # Windows' default timer tick is ~15.6ms, which caps how often Tkinter's
+    # after() can actually fire regardless of the delay requested - it makes
+    # animations feel choppy and out of sync on high refresh-rate monitors
+    # (90/120/144/240Hz). Dropping the system timer resolution to 1ms lets
+    # after() fire close to the delay we ask for, so redraws can keep pace
+    # with the display instead of being capped near ~64fps.
+    ctypes.windll.winmm.timeBeginPeriod(1)
+    atexit.register(lambda: ctypes.windll.winmm.timeEndPeriod(1))
+except Exception:
+    pass
 
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
 
 CONFIG_FILE = Path.home() / ".network-doctor.json"
+NO_WINDOW = 0x08000000  # hide console flashes from subprocess calls
 
-# ── Catppuccin Mocha ─────────────────────────────────────────────
-C_BASE   = "#1e1e2e"
-C_MANTLE = "#181825"
-C_S0     = "#313244"
-C_S1     = "#45475a"
-C_S2     = "#585b70"
-C_OV0    = "#6c7086"
-C_OV1    = "#7f849c"
-C_SUB0   = "#a6adc8"
-C_SUB1   = "#bac2de"
-C_TEXT   = "#cdd6f4"
-C_MAUVE  = "#cba6f7"
-C_RED    = "#f38ba8"
-C_PEACH  = "#fab387"
-C_YELLOW = "#f9e2af"
-C_GREEN  = "#a6e3a1"
-C_TEAL   = "#94e2d5"
-C_SKY    = "#89dceb"
-C_BLUE   = "#89b4fa"
-C_LAVEN  = "#b4befe"
-C_DARK   = "#1e1e2e"
-# ─────────────────────────────────────────────────────────────────
+# ── Palette (speedtest-inspired dark navy + teal) ────────────────
+C_BASE   = "#0b1120"
+C_CARD   = "#131c31"
+C_CARD2  = "#0e1627"
+C_BORDER = "#1e293b"
+C_BORDHI = "#41699e"
+C_HOVER  = "#233047"
+C_TEXT   = "#f8fafc"
+C_SUB    = "#94a3b8"
+C_MUTED  = "#64748b"
+C_TEAL   = "#2dd4bf"
+C_TEALD  = "#14b8a6"
+C_GREEN  = "#4ade80"
+C_RED    = "#f87171"
+C_AMBER  = "#fbbf24"
+C_BLUE   = "#60a5fa"
+C_PURPLE = "#a78bfa"
+C_DARK   = "#0b1120"
 
-PING_TARGETS_BASE = [
-    ("Google DNS",     "8.8.8.8"),
-    ("Cloudflare DNS", "1.1.1.1"),
-    ("google.com",     "google.com"),
-]
+RGB_TEAL  = (45, 212, 191)
+RGB_GREEN = (74, 222, 128)
 
-# Commands that require admin on Windows
+PING_TARGETS_BASE = [("Google DNS", "8.8.8.8"), ("Cloudflare", "1.1.1.1"), ("google.com", "google.com")]
 _WIN_NEEDS_ADMIN = {"ip_renew", "winsock", "adapter_restart", "net_reset"}
+
+
+def _hex2rgb(h):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _lerp_color(h1, h2, t):
+    a, b = _hex2rgb(h1), _hex2rgb(h2)
+    return "#%02x%02x%02x" % tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def _silent(cmd, timeout=15):
+    return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=timeout,
+                                   text=True, creationflags=NO_WINDOW)
 
 
 def _detect_router_ip():
     try:
-        if IS_WIN:
-            out = subprocess.check_output("ipconfig", shell=True, text=True, timeout=5,
-                                          stderr=subprocess.DEVNULL)
-            for line in out.split("\n"):
-                if "Default Gateway" in line and ":" in line:
-                    ip = line.split(":")[-1].strip()
-                    if re.match(r"\d+\.\d+\.\d+\.\d+", ip):
-                        return ip
-        elif IS_MAC:
-            out = subprocess.check_output("route -n get default", shell=True, text=True,
-                                          timeout=5, stderr=subprocess.DEVNULL)
-            m = re.search(r"gateway:\s+(\S+)", out)
-            if m:
-                return m.group(1)
-        else:
-            out = subprocess.check_output("ip route show default", shell=True, text=True,
-                                          timeout=5, stderr=subprocess.DEVNULL)
-            m = re.search(r"default via (\S+)", out)
-            if m:
-                return m.group(1)
+        out = _silent("ipconfig", 5)
+        for line in out.split("\n"):
+            if "Default Gateway" in line and ":" in line:
+                ip = line.split(":")[-1].strip()
+                if re.match(r"\d+\.\d+\.\d+\.\d+", ip):
+                    return ip
     except Exception:
         pass
     return "192.168.0.1"
@@ -90,9 +95,7 @@ def _detect_router_ip():
 
 def _is_admin():
     try:
-        if IS_WIN:
-            return bool(ctypes.windll.shell32.IsUserAnAdmin())
-        return os.geteuid() == 0
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
 
@@ -101,8 +104,7 @@ def _load_config():
     try:
         if CONFIG_FILE.exists():
             data = json.loads(CONFIG_FILE.read_text())
-            pw = base64.b64decode(data.get("rp", "")).decode()
-            return pw if pw else ""
+            return base64.b64decode(data.get("rp", "")).decode() or ""
     except Exception:
         pass
     return ""
@@ -118,68 +120,191 @@ def _save_config(password=""):
 
 def _run_as_admin(cmd):
     try:
-        if IS_WIN:
-            ret = ctypes.windll.shell32.ShellExecuteW(
-                None, "runas", "cmd.exe", f'/c {cmd} & pause', None, 1
-            )
-            return ret > 32
-        elif IS_MAC:
-            escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
-            subprocess.Popen(["osascript", "-e",
-                               f'do shell script "{escaped}" with administrator privileges'])
-            return True
-        else:
-            for launcher in [
-                ["pkexec", "bash", "-c", cmd],
-                ["gnome-terminal", "--", "bash", "-c", f"sudo bash -c '{cmd}'; read"],
-                ["xterm", "-e", f"sudo bash -c '{cmd}'; read"],
-                ["konsole", "--", "bash", "-c", f"sudo bash -c '{cmd}'; read"],
-            ]:
-                try:
-                    subprocess.Popen(launcher)
-                    return True
-                except FileNotFoundError:
-                    continue
-            return False
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c {cmd} & pause', None, 1)
+        return ret > 32
     except Exception:
         return False
 
 
 def _get_active_adapter():
     try:
-        if IS_WIN:
-            out = subprocess.check_output(
-                'powershell -Command "Get-NetAdapter | Where-Object { $_.Status -eq \'Up\' }'
-                ' | Select-Object -First 1 -ExpandProperty Name"',
-                shell=True, timeout=8, text=True, stderr=subprocess.DEVNULL,
-            )
-            return out.strip().split("\n")[0].strip() or None
-        elif IS_MAC:
-            out = subprocess.check_output("route -n get default", shell=True, text=True,
-                                          timeout=5, stderr=subprocess.DEVNULL)
-            m = re.search(r"interface:\s+(\S+)", out)
-            return m.group(1) if m else "en0"
-        else:
-            out = subprocess.check_output("ip route show default", shell=True, text=True,
-                                          timeout=5, stderr=subprocess.DEVNULL)
-            m = re.search(r"dev\s+(\S+)", out)
-            return m.group(1) if m else None
+        out = _silent('powershell -Command "Get-NetAdapter | Where-Object { $_.Status -eq \'Up\' }'
+                      ' | Select-Object -First 1 -ExpandProperty Name"', 8)
+        return out.strip().split("\n")[0].strip() or None
     except Exception:
         return None
 
 
-def _get_mac_network_service(iface):
-    try:
-        out = subprocess.check_output("networksetup -listnetworkserviceorder",
-                                      shell=True, text=True, timeout=5,
-                                      stderr=subprocess.DEVNULL)
-        lines = out.strip().split("\n")
-        for i, line in enumerate(lines):
-            if f"Device: {iface})" in line and i > 0:
-                return re.sub(r"^\(\d+\)\s+", "", lines[i - 1].strip())
-    except Exception:
-        pass
-    return None
+def _pil_font(size):
+    for name in ("seguisb.ttf", "segoeuib.ttf", "arialbd.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+class CircleButton(tk.Canvas):
+    """Speedtest-style hero button: rotating comet arc + breathing glow,
+    brighter on hover, green ripple on click. All frames pre-rendered
+    with PIL at 2x supersampling for antialiasing."""
+
+    N = 108       # rotation frames (one full revolution) - targets 60fps redraw rate
+    SS = 2        # supersampling factor
+
+    def __init__(self, master, size=250, command=None, lines=("RESTART", "ROUTER")):
+        try:
+            self._scale = master.winfo_toplevel()._get_widget_scaling()
+        except Exception:
+            self._scale = 1.0
+        px = int(size * self._scale)
+        super().__init__(master, width=px, height=px, bg=C_BASE, highlightthickness=0, cursor="hand2")
+        self.command = command
+        self._px = px
+        self._render(px, lines)
+        self._item = self.create_image(px // 2, px // 2, image=self._frames[0])
+        self._i = 0
+        self._hover = False
+        self._last_hover_drawn = False
+        self._rippling = False
+        self._t0 = time.perf_counter()
+        self._period = 1.8  # seconds per full revolution
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", self._click)
+        self._spin()
+
+    # ── rendering ──
+    def _render(self, px, lines):
+        from PIL import ImageEnhance
+        D = px * self.SS
+        c = D / 2
+        ring_r = D / 2 - 18 * self.SS
+        ring_w = int(2.2 * self._scale * self.SS)
+        bg = _hex2rgb(C_BASE)
+
+        def disc_layer(ring_rgb, lift=0):
+            img = Image.new("RGBA", (D, D), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            steps = 36
+            inner = (20 + lift, 31 + lift, 54 + lift)
+            outer = (13 + lift, 21 + lift, 38 + lift)
+            for s in range(steps, 0, -1):
+                t = s / steps
+                col = tuple(int(outer[k] + (inner[k] - outer[k]) * (1 - t)) for k in range(3))
+                d.ellipse([c - ring_r * t, c - ring_r * t, c + ring_r * t, c + ring_r * t], fill=col + (255,))
+            d.ellipse([c - ring_r, c - ring_r, c + ring_r, c + ring_r],
+                      outline=ring_rgb + (255,), width=ring_w)
+            r2 = ring_r - 7 * self.SS
+            d.ellipse([c - r2, c - r2, c + r2, c + r2], outline=(48, 66, 104, 110),
+                      width=max(1, self.SS))
+            f = _pil_font(int(D * 0.105))
+            dy = D * 0.058
+            for i, txt in enumerate(lines):
+                y = c + (i - (len(lines) - 1) / 2) * 2.1 * dy
+                d.text((c, y), txt, font=f, fill=(248, 250, 252, 255), anchor="mm")
+            return img
+
+        # soft glow ring, blurred once, alpha-scaled per frame
+        glow = Image.new("RGBA", (D, D), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.ellipse([c - ring_r, c - ring_r, c + ring_r, c + ring_r],
+                   outline=RGB_TEAL + (255,), width=int(8 * self.SS * self._scale))
+        glow = glow.filter(ImageFilter.GaussianBlur(12 * self.SS))
+
+        # comet: near-white arc with fading 120° tail + its own glow halo
+        comet = Image.new("RGBA", (D, D), (0, 0, 0, 0))
+        cd = ImageDraw.Draw(comet)
+        box = [c - ring_r, c - ring_r, c + ring_r, c + ring_r]
+        tail, segs = 120, 48
+        for s in range(segs):
+            a1 = -s * tail / segs
+            a0 = a1 - tail / segs - 0.5
+            alpha = int(255 * (1 - s / segs) ** 1.4)
+            cd.arc(box, start=a0, end=a1, fill=(212, 255, 248, alpha),
+                   width=int(5.5 * self.SS * self._scale))
+        halo = comet.filter(ImageFilter.GaussianBlur(6 * self.SS))
+        halo.putalpha(halo.getchannel("A").point(lambda v: int(v * 0.85)))
+        halo.alpha_composite(comet.filter(ImageFilter.GaussianBlur(int(1.2 * self.SS))))
+        comet = halo
+
+        # dim base ring so the moving comet pops against it
+        base = disc_layer((21, 99, 90))
+
+        def flatten(img):
+            out = Image.new("RGB", (D, D), bg)
+            out.paste(img, (0, 0), img)
+            return out.resize((px, px), Image.LANCZOS)
+
+        self._frames = []
+        self._hover_frames = []
+        for i in range(self.N):
+            breath = 0.35 + 0.65 * (math.sin(2 * math.pi * i / self.N) + 1) / 2
+            fr = Image.new("RGBA", (D, D), (0, 0, 0, 0))
+            g = glow.copy()
+            g.putalpha(g.getchannel("A").point(lambda v, s=breath: int(v * s)))
+            fr.alpha_composite(g)
+            fr.alpha_composite(base)
+            # BILINEAR, not BICUBIC: the comet is already Gaussian-blurred so
+            # the softer resample is visually identical but ~2x cheaper,
+            # letting us pre-render far more frames in the same startup time.
+            fr.alpha_composite(comet.rotate(-i * 360 / self.N, resample=Image.BILINEAR))
+            self._frames.append(ImageTk.PhotoImage(flatten(fr)))
+            # Brighten the RGBA composite itself (still transparent background,
+            # alpha untouched by blend-with-black) BEFORE flattening onto bg -
+            # brightening the flattened square instead lit up the whole square
+            # behind the ring, showing as a visible box on hover.
+            hover_fr = ImageEnhance.Brightness(fr).enhance(1.28)
+            self._hover_frames.append(ImageTk.PhotoImage(flatten(hover_fr)))
+
+        # ripple: expanding green ring fading out
+        self._ripple = []
+        bright = disc_layer((94, 234, 212), lift=7)
+        for i in range(6):
+            t = i / 5
+            fr = Image.new("RGBA", (D, D), (0, 0, 0, 0))
+            fr.alpha_composite(glow)
+            fr.alpha_composite(bright)
+            rd = ImageDraw.Draw(fr)
+            rr = ring_r + (ring_r * 0.16) * t
+            alpha = int(220 * (1 - t))
+            rd.ellipse([c - rr, c - rr, c + rr, c + rr],
+                       outline=RGB_GREEN + (alpha,), width=int(3.5 * self.SS * self._scale))
+            self._ripple.append(ImageTk.PhotoImage(flatten(fr)))
+
+    # ── behaviour ──
+    def _set_hover(self, on):
+        self._hover = on
+
+    def _click(self, _):
+        if self.command:
+            self.command()
+        self._rippling = True
+        self._play_ripple(time.perf_counter())
+
+    def _play_ripple(self, t0, dur=0.22):
+        t = (time.perf_counter() - t0) / dur
+        if t < 1.0:
+            self.itemconfig(self._item, image=self._ripple[int(t * len(self._ripple))])
+            self.after(6, self._play_ripple, t0, dur)
+        else:
+            self._rippling = False
+
+    def _spin(self):
+        if not self._rippling:
+            # Frame picked from elapsed wall-clock time, not a tick counter -
+            # immune to after() jitter/drift, so rotation speed stays constant
+            # regardless of the monitor's refresh rate or timer delays.
+            elapsed = time.perf_counter() - self._t0
+            i = int((elapsed / self._period) * self.N) % self.N
+            if i != self._i or self._hover != self._last_hover_drawn:
+                self._i = i
+                self._last_hover_drawn = self._hover
+                frames = self._hover_frames if self._hover else self._frames
+                self.itemconfig(self._item, image=frames[i])
+        # Poll faster than any frame bucket (period/N = 25ms) so a new frame
+        # appears within a few ms of becoming due - keeps up with 120/144/240Hz.
+        self.after(4, self._spin)
 
 
 class NetworkDoctor(ctk.CTk):
@@ -188,819 +313,535 @@ class NetworkDoctor(ctk.CTk):
         self.title("Network Doctor")
         self.configure(fg_color=C_BASE)
         self._saved_password = _load_config()
-        self._running = False
         self._router_ip = _detect_router_ip()
         self._ping_targets = [("Router", self._router_ip)] + PING_TARGETS_BASE
         self._last_ip_info = ""
+        self._toast_job = None
+        self._online = None
+        self._pulse_t0 = time.perf_counter()
+        self._speed_testing = False
 
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        w = min(920, int(sw * 0.46))
-        h = min(1060, int(sh * 0.90))
-        self.geometry(f"{w}x{h}")
-        self.minsize(740, 760)
-
+        self.geometry("600x730")
+        self.minsize(560, 680)
+        self.attributes("-alpha", 0.0)
         self._build_ui()
-        self.after(600, self._auto_check)
+        self._fade_in()
+        self.after(400, self._auto_check)
+        self.after(900, self._pulse_status)
 
-    # ══════════════════════════════════════════════════════════════
-    # UI
-    # ══════════════════════════════════════════════════════════════
+    def _fade_in(self, t0=None):
+        if t0 is None:
+            t0 = time.perf_counter()
+        t = min(1.0, (time.perf_counter() - t0) / 0.3)
+        self.attributes("-alpha", t)
+        if t < 1.0:
+            self.after(6, self._fade_in, t0)
+
+    # ══════════════════════ UI ══════════════════════
     def _build_ui(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=0)
-        self.grid_rowconfigure(1, weight=0)
-        self.grid_rowconfigure(2, weight=1)
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x", padx=24, pady=(18, 4))
+        ctk.CTkLabel(head, text="NETWORK DOCTOR", font=ctk.CTkFont("Segoe UI", 17, "bold"),
+                     text_color=C_TEXT).pack(side="left")
+        right = ctk.CTkFrame(head, fg_color="transparent")
+        right.pack(side="right")
+        self.status_lbl = ctk.CTkLabel(right, text="●  se verifică...", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                                       text_color=C_MUTED)
+        self.status_lbl.pack(anchor="e")
+        ctk.CTkLabel(right, text=f"gateway {self._router_ip}", font=ctk.CTkFont("Segoe UI", 10),
+                     text_color=C_MUTED).pack(anchor="e")
 
-        PX = 22
-
-        # ── Header ───────────────────────────────────────────────
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=PX, pady=(22, 6))
-
-        ctk.CTkLabel(
-            header, text="◆",
-            font=ctk.CTkFont(size=20), text_color=C_MAUVE,
-        ).pack(side="left")
-
-        ctk.CTkLabel(
-            header, text="  Network Doctor",
-            font=ctk.CTkFont(size=22, weight="bold"), text_color=C_TEXT,
-        ).pack(side="left")
-
-        ctk.CTkLabel(
-            header, text="v2.0",
-            font=ctk.CTkFont(size=10), text_color=C_OV1,
-            fg_color=C_S1, corner_radius=4, padx=7, pady=3,
-        ).pack(side="left", padx=10)
-
-        os_label = "Windows" if IS_WIN else ("macOS" if IS_MAC else "Linux")
-        ctk.CTkLabel(
-            header, text=f"Diagnose & fix your internet  ·  {os_label}",
-            font=ctk.CTkFont(size=11), text_color=C_OV1,
-        ).pack(side="right")
-
-        # ── Status bar ───────────────────────────────────────────
-        sb = ctk.CTkFrame(
-            self, fg_color=C_S0, corner_radius=10,
-            border_width=1, border_color=C_S1,
+        self.tabs = ctk.CTkTabview(
+            self, fg_color="transparent",
+            segmented_button_fg_color=C_CARD, segmented_button_selected_color=C_TEALD,
+            segmented_button_selected_hover_color=C_TEAL, segmented_button_unselected_color=C_CARD,
+            segmented_button_unselected_hover_color=C_HOVER,
+            text_color=C_TEXT, corner_radius=10,
         )
-        sb.grid(row=1, column=0, sticky="ew", padx=PX, pady=(0, 14))
+        self.tabs.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        self.tabs._segmented_button.configure(font=ctk.CTkFont("Segoe UI", 13, "bold"), height=36)
+        for name in ("Acasă", "Reparații", "Diagnostic"):
+            self.tabs.add(name)
+        self._build_home(self.tabs.tab("Acasă"))
+        self._build_fixes(self.tabs.tab("Reparații"))
+        self._build_diag(self.tabs.tab("Diagnostic"))
 
-        self.status_dot = ctk.CTkLabel(
-            sb, text="●",
-            font=ctk.CTkFont(size=16), text_color=C_OV0,
-        )
-        self.status_dot.pack(side="left", padx=(14, 6), pady=12)
+    def _card(self, parent, **pack):
+        f = ctk.CTkFrame(parent, fg_color=C_CARD, corner_radius=14, border_width=1, border_color=C_BORDER)
+        f.pack(fill="x", **pack)
+        self._hoverize(f)
+        return f
 
-        self.status_label = ctk.CTkLabel(
-            sb, text="Checking connection...",
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=C_SUB0,
-        )
-        self.status_label.pack(side="left", pady=12)
+    def _hoverize(self, widget, hi=C_BORDHI):
+        """Animated border highlight on hover, paced by elapsed time
+        (not tick count) so it stays smooth at any monitor refresh rate."""
+        def go(target):
+            start = widget.cget("border_color")
+            t0 = time.perf_counter()
+            dur = 0.14
 
-        self.progress_bar = ctk.CTkProgressBar(
-            sb, width=160, height=6,
-            progress_color=C_MAUVE, fg_color=C_S1, corner_radius=3,
-        )
-        self.progress_bar.pack(side="right", padx=14, pady=12)
-        self.progress_bar.set(0)
+            def step():
+                t = min(1.0, (time.perf_counter() - t0) / dur)
+                try:
+                    widget.configure(border_color=_lerp_color(start, target, t))
+                except Exception:
+                    return
+                if t < 1.0:
+                    widget.after(6, step)
+            step()
+        widget.bind("<Enter>", lambda e: go(hi), add="+")
+        widget.bind("<Leave>", lambda e: go(C_BORDER), add="+")
 
-        # Refresh button in status bar
-        ctk.CTkButton(
-            sb, text="↺",
-            command=self._auto_check,
-            width=32, height=28, corner_radius=6,
-            font=ctk.CTkFont(size=14),
-            fg_color=C_S1, hover_color=C_S2, text_color=C_SUB0,
-        ).pack(side="right", padx=(0, 6), pady=12)
+    def _toast(self, text, color=C_GREEN):
+        if self._toast_job:
+            self.after_cancel(self._toast_job)
+            self._toast_job = None
+        lbl = self.toast_lbl
 
-        # ── Scroll area ──────────────────────────────────────────
-        self.scroll = ctk.CTkScrollableFrame(
-            self, fg_color="transparent", corner_radius=0,
-            scrollbar_button_color=C_S1,
-            scrollbar_button_hover_color=C_S2,
-        )
-        self.scroll.grid(row=2, column=0, sticky="nsew", padx=PX, pady=(0, 14))
-        self.scroll.grid_columnconfigure(0, weight=1)
+        def fade(t0_from, t0_to, dur, on_text=None):
+            t0 = time.perf_counter()
 
-        self._build_router()
-        self._build_optimizations()
-        self._build_fixes()
-        self._build_diag()
-        self._build_log()
+            def step():
+                t = min(1.0, (time.perf_counter() - t0) / dur)
+                kw = {"text_color": _lerp_color(t0_from, t0_to, t)}
+                if on_text:
+                    kw["text"] = on_text
+                lbl.configure(**kw)
+                if t < 1.0:
+                    lbl.after(6, step)
+            step()
 
-    def _section(self, title, icon, row, accent=C_MAUVE, pady=(0, 10)):
-        card = ctk.CTkFrame(
-            self.scroll, fg_color=C_S0, corner_radius=12,
-            border_width=1, border_color=C_S1,
-        )
-        card.grid(row=row, column=0, sticky="ew", pady=pady)
-        card.grid_columnconfigure(0, weight=1)
+        fade(C_BASE, color, 0.24, on_text=text)
 
-        hdr = ctk.CTkFrame(card, fg_color="transparent")
-        hdr.pack(fill="x", padx=16, pady=(12, 8))
+        def fade_out():
+            fade(color, C_BASE, 0.4)
+            lbl.after(420, lambda: lbl.configure(text=""))
+        self._toast_job = self.after(3200, fade_out)
 
-        ctk.CTkLabel(
-            hdr, text="●",
-            font=ctk.CTkFont(size=10), text_color=accent,
-        ).pack(side="left", padx=(0, 8))
+    def _count_to(self, key, value, suffix_decimals=0):
+        """Ease-out count-up animation for stat tiles."""
+        lbl = self.stat_vals[key]
+        try:
+            end = float(value)
+        except (TypeError, ValueError):
+            lbl.configure(text=value if value else "✕")
+            return
+        t0 = time.perf_counter()
 
-        ctk.CTkLabel(
-            hdr, text=f"{icon}  {title}",
-            font=ctk.CTkFont(size=13, weight="bold"), text_color=C_TEXT,
-        ).pack(side="left")
+        def step():
+            t = min(1.0, (time.perf_counter() - t0) / 0.8)
+            e = 1 - (1 - t) ** 3
+            lbl.configure(text=f"{end * e:.{suffix_decimals}f}")
+            if t < 1.0:
+                lbl.after(6, step)
+        step()
 
-        ctk.CTkFrame(card, fg_color=C_S1, height=1, corner_radius=0).pack(fill="x", padx=16)
+    # ── Tab: Acasă ──
+    def _build_home(self, tab):
+        tab.configure(fg_color="transparent")
 
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=16, pady=(10, 14))
+        hero = ctk.CTkFrame(tab, fg_color="transparent")
+        hero.pack(expand=True, fill="both")
+        inner = ctk.CTkFrame(hero, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        CircleButton(inner, command=self._restart_router_flow).pack()
+        ctk.CTkLabel(inner, text="un click - copiază parola și deschide pagina routerului",
+                     font=ctk.CTkFont("Segoe UI", 11), text_color=C_MUTED).pack(pady=(6, 0))
+        self.toast_lbl = ctk.CTkLabel(inner, text="", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                                      text_color=C_GREEN)
+        self.toast_lbl.pack(pady=(2, 0))
 
-        return body
+        # Stat tiles
+        stats = ctk.CTkFrame(tab, fg_color="transparent")
+        stats.pack(fill="x", padx=8, pady=(4, 10))
+        for i in range(3):
+            stats.grid_columnconfigure(i, weight=1, uniform="s")
+        self.stat_vals = {}
+        self.stat_tiles = {}
+        tiles = [("PING ROUTER", "router", C_TEAL, "ms"), ("PING INTERNET", "inet", C_BLUE, "ms"),
+                 ("DOWNLOAD", "down", C_PURPLE, "Mbps")]
+        for i, (title, key, color, unit) in enumerate(tiles):
+            t = ctk.CTkFrame(stats, fg_color=C_CARD, corner_radius=12, border_width=1, border_color=C_BORDER)
+            t.grid(row=0, column=i, sticky="nsew", padx=4)
+            self._hoverize(t)
+            ctk.CTkLabel(t, text=title, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+                         text_color=C_MUTED).pack(pady=(10, 0))
+            v = ctk.CTkLabel(t, text="-", font=ctk.CTkFont("Segoe UI", 22, "bold"), text_color=color)
+            v.pack()
+            ctk.CTkLabel(t, text=unit, font=ctk.CTkFont("Segoe UI", 9), text_color=C_MUTED).pack(pady=(0, 8))
+            self.stat_vals[key] = v
+            self.stat_tiles[key] = t
 
-    def _hint(self, parent, text, pady=(0, 2)):
-        ctk.CTkLabel(
-            parent, text=text,
-            font=ctk.CTkFont(size=10), text_color=C_OV0,
-            anchor="w", wraplength=700,
-        ).pack(anchor="w", pady=pady)
+        row = ctk.CTkFrame(tab, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=(0, 10))
+        row.grid_columnconfigure((0, 1), weight=1)
+        self.btn_speed = ctk.CTkButton(row, text="Test viteză", command=self._run_speed_test,
+                                       height=40, corner_radius=10, font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                                       fg_color=C_TEALD, hover_color=C_TEAL, text_color=C_DARK)
+        self.btn_speed.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        ctk.CTkButton(row, text="Deschide routerul", command=self._open_router,
+                      height=40, corner_radius=10, font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                      fg_color=C_CARD, hover_color=C_HOVER, text_color=C_TEXT,
+                      border_width=1, border_color=C_BORDER).grid(row=0, column=1, sticky="ew", padx=(5, 0))
 
-    def _divider(self, parent):
-        ctk.CTkFrame(parent, fg_color=C_S1, height=1, corner_radius=0).pack(fill="x", pady=(6, 10))
-
-    # ──────────────────────────────────────────────────────────────
-    # Router Access
-    # ──────────────────────────────────────────────────────────────
-    def _build_router(self):
-        c = self._section("Router Access", "↗", 0, accent=C_BLUE)
-
-        btn_row = ctk.CTkFrame(c, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 4))
-        btn_row.grid_columnconfigure(0, weight=1)
-        btn_row.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkButton(
-            btn_row, text="↗  Open Router Page",
-            command=self._open_router,
-            height=38, corner_radius=8,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=C_BLUE, hover_color="#74a9f0", text_color=C_DARK,
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
-
-        ctk.CTkButton(
-            btn_row, text="⧉  Open + Copy Password",
-            command=self._open_and_copy,
-            height=38, corner_radius=8,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=C_MAUVE, hover_color="#b690e5", text_color=C_DARK,
-        ).grid(row=0, column=1, sticky="ew", padx=(5, 0))
-
-        self._hint(c, f"Opens http://{self._router_ip}  ·  Right button also copies the saved password first")
-
-        ctk.CTkButton(
-            c, text="↺  Reboot Guide",
-            command=self._reboot_guide,
-            height=30, corner_radius=8,
-            font=ctk.CTkFont(size=11),
-            fg_color=C_S1, hover_color=C_S2, text_color=C_SUB0,
-        ).pack(fill="x", pady=(8, 0))
-        self._hint(c, "Step-by-step for rebooting via admin panel or physical unplug")
-
-        self._divider(c)
-
-        pw_card = ctk.CTkFrame(c, fg_color=C_MANTLE, corner_radius=8)
-        pw_card.pack(fill="x")
-
-        pw_top = ctk.CTkFrame(pw_card, fg_color="transparent")
-        pw_top.pack(fill="x", padx=12, pady=(10, 4))
-
-        ctk.CTkLabel(
-            pw_top, text="Admin Password",
-            font=ctk.CTkFont(size=11, weight="bold"), text_color=C_SUB1,
-        ).pack(side="left")
-
-        self.pw_status = ctk.CTkLabel(
-            pw_top,
-            text="✔ Saved" if self._saved_password else "",
-            font=ctk.CTkFont(size=11), text_color=C_GREEN,
-        )
+        # Password card
+        pw = self._card(tab, padx=8, pady=(0, 4))
+        top = ctk.CTkFrame(pw, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(12, 4))
+        ctk.CTkLabel(top, text="Parolă router", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                     text_color=C_SUB).pack(side="left")
+        self.pw_status = ctk.CTkLabel(top, text="✓ salvată" if self._saved_password else "",
+                                      font=ctk.CTkFont("Segoe UI", 11), text_color=C_GREEN)
         self.pw_status.pack(side="right")
-
-        pw_ctrl = ctk.CTkFrame(pw_card, fg_color="transparent")
-        pw_ctrl.pack(fill="x", padx=12, pady=(0, 10))
-
+        ctrl = ctk.CTkFrame(pw, fg_color="transparent")
+        ctrl.pack(fill="x", padx=14, pady=(0, 12))
         self.pw_var = ctk.StringVar(value=self._saved_password)
-        self.pw_entry = ctk.CTkEntry(
-            pw_ctrl, textvariable=self.pw_var, show="*",
-            height=34, corner_radius=6,
-            fg_color=C_S0, border_color=C_S1, text_color=C_TEXT,
-            placeholder_text="Enter router admin password...",
-        )
+        self.pw_entry = ctk.CTkEntry(ctrl, textvariable=self.pw_var, show="•", height=36, corner_radius=8,
+                                     fg_color=C_CARD2, border_color=C_BORDER, text_color=C_TEXT)
         self.pw_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(ctrl, text="👁", command=self._toggle_pw_vis, width=36, height=36, corner_radius=8,
+                      font=ctk.CTkFont(size=13), fg_color=C_CARD2, hover_color=C_HOVER,
+                      text_color=C_SUB).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(ctrl, text="Copiază", command=self._copy_password, width=70, height=36, corner_radius=8,
+                      font=ctk.CTkFont("Segoe UI", 11, "bold"), fg_color=C_CARD2, hover_color=C_HOVER,
+                      text_color=C_TEXT).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(ctrl, text="Salvează", command=self._save_password_action, width=76, height=36,
+                      corner_radius=8, font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                      fg_color=C_TEALD, hover_color=C_TEAL, text_color=C_DARK).pack(side="left")
 
-        self.pw_show = ctk.CTkSwitch(
-            pw_ctrl, text="Show",
-            command=self._toggle_pw_vis,
-            width=40, switch_width=36, switch_height=18,
-            font=ctk.CTkFont(size=11), text_color=C_SUB0,
-            progress_color=C_MAUVE,
-        )
-        self.pw_show.pack(side="left", padx=(0, 8))
+    # ── Tab: Reparații ──
+    def _build_fixes(self, tab):
+        tab.configure(fg_color="transparent")
+        scroll = ctk.CTkScrollableFrame(tab, fg_color="transparent",
+                                        scrollbar_button_color=C_BORDER, scrollbar_button_hover_color=C_HOVER)
+        scroll.pack(fill="both", expand=True)
 
-        ctk.CTkButton(
-            pw_ctrl, text="Copy",
-            command=self._copy_password,
-            width=62, height=32, corner_radius=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=C_S1, hover_color=C_S2, text_color=C_TEXT,
-        ).pack(side="left", padx=(0, 4))
-
-        ctk.CTkButton(
-            pw_ctrl, text="Save",
-            command=self._save_password_action,
-            width=62, height=32, corner_radius=6,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color=C_GREEN, hover_color="#8fd18b", text_color=C_DARK,
-        ).pack(side="left")
-
-    # ──────────────────────────────────────────────────────────────
-    # Optimizations
-    # ──────────────────────────────────────────────────────────────
-    def _build_optimizations(self):
-        c = self._section("Optimizations", "⚡", 1, accent=C_YELLOW)
-
-        opts = [
-            (
-                "⚡  Set Fast DNS  (Cloudflare 1.1.1.1 + Google 8.8.8.8)",
-                C_TEAL, "#7bc8bc", self._set_fast_dns,
-                "Often the single biggest speed improvement — requires admin elevation.",
-            ),
-            (
-                "⏻  Prevent Adapter Sleep",
-                C_SKY, "#72cadd", self._prevent_wifi_sleep,
-                "Stops the OS from powering down your adapter — fixes random disconnects — requires admin.",
-            ),
+        fixes = [
+            ("Flush DNS", "dns_flush", "Curăță cache-ul DNS - repară „site not found”", C_BLUE),
+            ("Renew IP", "ip_renew", "Cere IP nou de la router - repară „no valid IP”", C_BLUE),
+            ("Reset Winsock", "winsock", "Reconstruiește socket-urile de rețea", C_AMBER),
+            ("Restart adaptor", "adapter_restart", "Oprește/pornește placa de rețea", C_AMBER),
         ]
+        grid = ctk.CTkFrame(scroll, fg_color="transparent")
+        grid.pack(fill="x", pady=(8, 4))
+        grid.grid_columnconfigure((0, 1), weight=1, uniform="f")
+        for i, (label, key, desc, color) in enumerate(fixes):
+            card = ctk.CTkFrame(grid, fg_color=C_CARD, corner_radius=12, border_width=1, border_color=C_BORDER)
+            card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=4, pady=4)
+            self._hoverize(card)
+            ctk.CTkButton(card, text=label, command=lambda k=key: self._run_fix(k),
+                          height=36, corner_radius=8, font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                          fg_color=color, hover_color=C_TEAL if color == C_BLUE else "#f5a623",
+                          text_color=C_DARK).pack(fill="x", padx=10, pady=(10, 4))
+            ctk.CTkLabel(card, text=desc, font=ctk.CTkFont("Segoe UI", 10), text_color=C_MUTED,
+                         wraplength=220, justify="left").pack(anchor="w", padx=12, pady=(0, 10))
 
-        for label, color, hover, cmd, desc in opts:
-            opt_card = ctk.CTkFrame(c, fg_color=C_MANTLE, corner_radius=8)
-            opt_card.pack(fill="x", pady=(0, 8))
-            inner = ctk.CTkFrame(opt_card, fg_color="transparent")
-            inner.pack(fill="x", padx=12, pady=10)
-            ctk.CTkButton(
-                inner, text=label, command=cmd,
-                height=34, corner_radius=6,
-                font=ctk.CTkFont(size=12, weight="bold"),
-                fg_color=color, hover_color=hover, text_color=C_DARK,
-            ).pack(fill="x", pady=(0, 5))
-            ctk.CTkLabel(
-                inner, text=desc,
-                font=ctk.CTkFont(size=10), text_color=C_OV1,
-                anchor="w", wraplength=680,
-            ).pack(anchor="w")
+        full = self._card(scroll, pady=(6, 10))
+        ctk.CTkButton(full, text="⚠  RESET COMPLET - toate reparațiile deodată",
+                      command=lambda: self._run_fix("net_reset"),
+                      height=42, corner_radius=8, font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                      fg_color=C_RED, hover_color="#ef4444", text_color=C_DARK).pack(fill="x", padx=12, pady=10)
+        ctk.CTkLabel(full, text="Ultima soluție înainte de restart la PC. Cere drepturi de administrator.",
+                     font=ctk.CTkFont("Segoe UI", 10), text_color=C_MUTED).pack(padx=12, pady=(0, 10))
 
-    # ──────────────────────────────────────────────────────────────
-    # Quick Fixes
-    # ──────────────────────────────────────────────────────────────
-    def _fixes_config(self):
-        if IS_WIN:
-            return [
-                ("Flush DNS",       "dns_flush",       C_BLUE,  "#74a9f0", "Clears stale DNS — fixes 'site not found'"),
-                ("Renew IP",        "ip_renew",        C_BLUE,  "#74a9f0", "Requests fresh IP — fixes 'no valid IP'"),
-                ("Reset Winsock",   "winsock",         C_PEACH, "#e89a70", "Rebuilds network sockets — partial connectivity"),
-                ("Restart Adapter", "adapter_restart", C_PEACH, "#e89a70", "Off/on adapter — like replugging"),
-            ]
-        elif IS_MAC:
-            return [
-                ("Flush DNS",       "dns_flush",       C_BLUE,  "#74a9f0", "Clears stale DNS — fixes 'site not found'"),
-                ("Renew IP",        "ip_renew",        C_BLUE,  "#74a9f0", "Requests fresh DHCP lease"),
-                ("Restart DNS",     "winsock",         C_PEACH, "#e89a70", "Restarts mDNSResponder"),
-                ("Restart Adapter", "adapter_restart", C_PEACH, "#e89a70", "Brings interface down then back up"),
-            ]
-        else:
-            return [
-                ("Flush DNS",       "dns_flush",       C_BLUE,  "#74a9f0", "Clears systemd-resolve DNS cache"),
-                ("Renew IP",        "ip_renew",        C_BLUE,  "#74a9f0", "Requests fresh DHCP lease"),
-                ("Restart Network", "winsock",         C_PEACH, "#e89a70", "Restarts NetworkManager"),
-                ("Restart Adapter", "adapter_restart", C_PEACH, "#e89a70", "Brings interface down then back up"),
-            ]
+        ctk.CTkLabel(scroll, text="OPTIMIZĂRI", font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=C_SUB).pack(anchor="w", padx=4, pady=(8, 2))
+        opts = [
+            ("DNS rapid (1.1.1.1 + 8.8.8.8)", self._set_fast_dns,
+             "Cea mai mare îmbunătățire de viteză, de obicei. Cere admin."),
+            ("Oprește sleep-ul adaptorului", self._prevent_wifi_sleep,
+             "Windows nu mai oprește placa de rețea - repară deconectările random. Cere admin."),
+        ]
+        for label, cmd, desc in opts:
+            card = self._card(scroll, pady=(0, 8))
+            ctk.CTkButton(card, text=label, command=cmd, height=38, corner_radius=8,
+                          font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                          fg_color=C_TEALD, hover_color=C_TEAL, text_color=C_DARK).pack(fill="x", padx=12, pady=(12, 4))
+            ctk.CTkLabel(card, text=desc, font=ctk.CTkFont("Segoe UI", 10),
+                         text_color=C_MUTED).pack(anchor="w", padx=14, pady=(0, 12))
 
-    def _build_fixes(self):
-        c = self._section("Quick Fixes", "⚙", 2, accent=C_PEACH)
+    # ── Tab: Diagnostic ──
+    def _build_diag(self, tab):
+        tab.configure(fg_color="transparent")
 
-        grid = ctk.CTkFrame(c, fg_color="transparent")
-        grid.pack(fill="x", pady=(0, 6))
-        grid.grid_columnconfigure(0, weight=1)
-        grid.grid_columnconfigure(1, weight=1)
-
-        for i, (label, key, color, hover, desc) in enumerate(self._fixes_config()):
-            col = i % 2
-            row_idx = i // 2
-            px = (0, 5) if col == 0 else (5, 0)
-            card = ctk.CTkFrame(grid, fg_color=C_MANTLE, corner_radius=8)
-            card.grid(row=row_idx, column=col, sticky="nsew", padx=px, pady=(0, 6))
-            inner = ctk.CTkFrame(card, fg_color="transparent")
-            inner.pack(fill="x", padx=10, pady=10)
-            ctk.CTkButton(
-                inner, text=label,
-                command=lambda k=key: self._run_fix(k),
-                height=32, corner_radius=6,
-                font=ctk.CTkFont(size=12, weight="bold"),
-                fg_color=color, hover_color=hover, text_color=C_DARK,
-            ).pack(fill="x", pady=(0, 4))
-            ctk.CTkLabel(
-                inner, text=desc,
-                font=ctk.CTkFont(size=10), text_color=C_OV0,
-                anchor="w", wraplength=220,
-            ).pack(anchor="w")
-
-        full_card = ctk.CTkFrame(c, fg_color=C_MANTLE, corner_radius=8)
-        full_card.pack(fill="x")
-        inner = ctk.CTkFrame(full_card, fg_color="transparent")
-        inner.pack(fill="x", padx=10, pady=10)
-        ctk.CTkButton(
-            inner,
-            text="⚠  Full Reset  —  All fixes at once (last resort before rebooting)",
-            command=lambda: self._run_fix("net_reset"),
-            height=34, corner_radius=6,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=C_RED, hover_color="#e06880", text_color=C_DARK,
-        ).pack(fill="x")
-
-    # ──────────────────────────────────────────────────────────────
-    # Diagnostics
-    # ──────────────────────────────────────────────────────────────
-    def _build_diag(self):
-        c = self._section("Diagnostics", "◎", 3, accent=C_GREEN)
-
-        btn_row = ctk.CTkFrame(c, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 10))
-
-        self.btn_diag = ctk.CTkButton(
-            btn_row, text="▶  Run All Tests",
-            command=self._run_all_diags,
-            height=38, corner_radius=8,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            fg_color=C_GREEN, hover_color="#8fd18b", text_color=C_DARK,
-        )
+        row = ctk.CTkFrame(tab, fg_color="transparent")
+        row.pack(fill="x", pady=(8, 8))
+        self.btn_diag = ctk.CTkButton(row, text="▶  Rulează toate testele", command=self._run_all_diags,
+                                      height=40, corner_radius=10, font=ctk.CTkFont("Segoe UI", 13, "bold"),
+                                      fg_color=C_TEALD, hover_color=C_TEAL, text_color=C_DARK)
         self.btn_diag.pack(side="left")
+        self.progress = ctk.CTkProgressBar(row, width=150, height=6, progress_color=C_TEAL,
+                                           fg_color=C_CARD, corner_radius=3)
+        self.progress.set(0)  # shown only while running
 
-        ctk.CTkButton(
-            btn_row, text="⚡  Speed Test",
-            command=self._run_speed_test,
-            height=38, corner_radius=8,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=C_MAUVE, hover_color="#b690e5", text_color=C_DARK,
-        ).pack(side="left", padx=(8, 0))
-
-        ctk.CTkLabel(
-            btn_row,
-            text="  Pings targets, checks DNS, shows IP config",
-            font=ctk.CTkFont(size=11), text_color=C_OV0, anchor="w",
-        ).pack(side="left")
-
-        # Ping grid 2×2
-        ping_grid = ctk.CTkFrame(c, fg_color="transparent")
+        ping_grid = ctk.CTkFrame(tab, fg_color="transparent")
         ping_grid.pack(fill="x", pady=(0, 8))
-        ping_grid.grid_columnconfigure(0, weight=1)
-        ping_grid.grid_columnconfigure(1, weight=1)
-
+        ping_grid.grid_columnconfigure((0, 1), weight=1, uniform="p")
         self.ping_labels = {}
         for i, (label, target) in enumerate(self._ping_targets):
-            col = i % 2
-            row_idx = i // 2
-            px = (0, 5) if col == 0 else (5, 0)
-            ping_card = ctk.CTkFrame(ping_grid, fg_color=C_MANTLE, corner_radius=8)
-            ping_card.grid(row=row_idx, column=col, sticky="nsew", padx=px, pady=(0, 6))
-            inner = ctk.CTkFrame(ping_card, fg_color="transparent")
+            card = ctk.CTkFrame(ping_grid, fg_color=C_CARD, corner_radius=10, border_width=1, border_color=C_BORDER)
+            card.grid(row=i // 2, column=i % 2, sticky="nsew", padx=4, pady=3)
+            self._hoverize(card)
+            inner = ctk.CTkFrame(card, fg_color="transparent")
             inner.pack(fill="x", padx=12, pady=8)
-            top_row = ctk.CTkFrame(inner, fg_color="transparent")
-            top_row.pack(fill="x")
-            ctk.CTkLabel(
-                top_row, text=label,
-                font=ctk.CTkFont(size=11, weight="bold"), text_color=C_SUB1,
-            ).pack(side="left")
-            lbl = ctk.CTkLabel(
-                top_row, text="—",
-                font=ctk.CTkFont(size=11, weight="bold"), text_color=C_OV0,
-            )
+            ctk.CTkLabel(inner, text=f"{label}  ·  {target}", font=ctk.CTkFont("Segoe UI", 11),
+                         text_color=C_SUB).pack(side="left")
+            lbl = ctk.CTkLabel(inner, text="-", font=ctk.CTkFont("Segoe UI", 12, "bold"), text_color=C_MUTED)
             lbl.pack(side="right")
             self.ping_labels[label] = lbl
-            ctk.CTkLabel(
-                inner, text=target,
-                font=ctk.CTkFont(size=10), text_color=C_OV0, anchor="w",
-            ).pack(anchor="w")
 
-        # IP info card with copy button
-        ip_card = ctk.CTkFrame(c, fg_color=C_MANTLE, corner_radius=8)
-        ip_card.pack(fill="x")
-
-        ip_toolbar = ctk.CTkFrame(ip_card, fg_color="transparent")
-        ip_toolbar.pack(fill="x", padx=12, pady=(8, 0))
-
-        ctk.CTkLabel(
-            ip_toolbar, text="IP Configuration",
-            font=ctk.CTkFont(size=10, weight="bold"), text_color=C_OV1,
-        ).pack(side="left")
-
-        ctk.CTkButton(
-            ip_toolbar, text="Copy",
-            command=self._copy_ip_info,
-            width=50, height=22, corner_radius=5,
-            font=ctk.CTkFont(size=10),
-            fg_color=C_S1, hover_color=C_S2, text_color=C_SUB0,
-        ).pack(side="right")
-
-        self.info_label = ctk.CTkLabel(
-            ip_card,
-            text="Run diagnostics to see your IP configuration",
-            font=ctk.CTkFont(family="Consolas", size=10),
-            text_color=C_OV0, anchor="w", justify="left",
-        )
+        ip_card = self._card(tab, pady=(0, 8))
+        bar = ctk.CTkFrame(ip_card, fg_color="transparent")
+        bar.pack(fill="x", padx=12, pady=(8, 0))
+        ctk.CTkLabel(bar, text="Configurație IP", font=ctk.CTkFont("Segoe UI", 11, "bold"),
+                     text_color=C_SUB).pack(side="left")
+        ctk.CTkButton(bar, text="Copiază", command=self._copy_ip_info, width=60, height=24, corner_radius=6,
+                      font=ctk.CTkFont("Segoe UI", 10), fg_color=C_CARD2, hover_color=C_HOVER,
+                      text_color=C_SUB).pack(side="right")
+        self.info_label = ctk.CTkLabel(ip_card, text="Rulează testele ca să vezi configurația",
+                                       font=ctk.CTkFont("Consolas", 10), text_color=C_MUTED,
+                                       anchor="w", justify="left")
         self.info_label.pack(anchor="w", padx=12, pady=(4, 10))
 
-    # ──────────────────────────────────────────────────────────────
-    # Log
-    # ──────────────────────────────────────────────────────────────
-    def _build_log(self):
-        c = self._section("Log", "≡", 4, accent=C_LAVEN)
-
-        toolbar = ctk.CTkFrame(c, fg_color="transparent")
-        toolbar.pack(fill="x", pady=(0, 6))
-        ctk.CTkLabel(
-            toolbar, text="Activity log — all actions and results",
-            font=ctk.CTkFont(size=10), text_color=C_OV0,
-        ).pack(side="left")
-        ctk.CTkButton(
-            toolbar, text="Clear",
-            command=self._clear_log,
-            width=54, height=26, corner_radius=6,
-            font=ctk.CTkFont(size=10),
-            fg_color=C_S1, hover_color=C_S2, text_color=C_SUB0,
-        ).pack(side="right")
-
-        self.log = ctk.CTkTextbox(
-            c, height=150,
-            font=("Consolas", 11),
-            fg_color=C_MANTLE, text_color=C_TEXT,
-            corner_radius=8, border_width=1, border_color=C_S1,
-        )
-        self.log.pack(fill="both", expand=True)
+        self.log = ctk.CTkTextbox(tab, font=("Consolas", 11), fg_color=C_CARD2, text_color=C_SUB,
+                                  corner_radius=10, border_width=1, border_color=C_BORDER)
+        self.log.pack(fill="both", expand=True, pady=(0, 4))
         self.log.configure(state="disabled")
 
-    # ══════════════════════════════════════════════════════════════
-    # Optimization actions
-    # ══════════════════════════════════════════════════════════════
-    def _set_fast_dns(self):
-        adapter = _get_active_adapter()
-        if not adapter:
-            messagebox.showwarning("No Adapter", "Could not find an active network adapter.")
-            return
-
-        if IS_WIN:
-            ok = messagebox.askyesno(
-                "Set Fast DNS",
-                f"This will set your adapter ('{adapter}') to use:\n\n"
-                f"  Primary DNS:   1.1.1.1 (Cloudflare)\n"
-                f"  Secondary DNS: 8.8.8.8 (Google)\n\n"
-                f"A UAC prompt will appear. Continue?"
-            )
-            if not ok:
-                return
-            cmd = (
-                f'netsh interface ip set dns name="{adapter}" source=static addr=1.1.1.1'
-                f' && netsh interface ip add dns name="{adapter}" addr=8.8.8.8 index=2'
-            )
-        elif IS_MAC:
-            service = _get_mac_network_service(adapter) or adapter
-            ok = messagebox.askyesno(
-                "Set Fast DNS",
-                f"Set '{service}' ({adapter}) to use:\n\n"
-                f"  Primary DNS:   1.1.1.1 (Cloudflare)\n"
-                f"  Secondary DNS: 8.8.8.8 (Google)\n\n"
-                f"Password prompt will appear. Continue?"
-            )
-            if not ok:
-                return
-            cmd = f'networksetup -setdnsservers "{service}" 1.1.1.1 8.8.8.8'
+    # ══════════════════════ Actions ══════════════════════
+    def _restart_router_flow(self):
+        pw = self.pw_var.get().strip()
+        if pw:
+            self.clipboard_clear()
+            self.clipboard_append(pw)
+            self._toast("Parola copiată - lipește-o în pagina routerului (Ctrl+V)")
         else:
-            ok = messagebox.askyesno(
-                "Set Fast DNS",
-                f"Set '{adapter}' to use:\n\n"
-                f"  Primary DNS:   1.1.1.1 (Cloudflare)\n"
-                f"  Secondary DNS: 8.8.8.8 (Google)\n\n"
-                f"Requires admin. Continue?"
-            )
-            if not ok:
-                return
-            cmd = (
-                f"resolvectl dns {adapter} 1.1.1.1 8.8.8.8 2>/dev/null || "
-                f"nmcli con mod \"$(nmcli -g NAME,DEVICE con show --active"
-                f" | grep -w '{adapter}' | cut -d: -f1)\" ipv4.dns '1.1.1.1 8.8.8.8'"
-            )
-
-        if _run_as_admin(cmd):
-            self._log("[OPTIMIZE] DNS set to Cloudflare (1.1.1.1) + Google (8.8.8.8)")
-            self._log("          Changes take effect immediately.")
-        else:
-            self._log("[OPTIMIZE] DNS change cancelled or failed.")
-
-    def _prevent_wifi_sleep(self):
-        adapter = _get_active_adapter()
-
-        if IS_WIN:
-            if not adapter:
-                messagebox.showwarning("No Adapter", "Could not find an active network adapter.")
-                return
-            ok = messagebox.askyesno(
-                "Prevent Adapter Sleep",
-                f"This will stop Windows from powering down your network adapter\n"
-                f"('{adapter}') to save power. Fixes random disconnects.\n\n"
-                f"A UAC prompt will appear. Continue?"
-            )
-            if not ok:
-                return
-            cmd = (
-                f'powercfg /setdcvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
-                f' 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'
-                f' && powercfg /setacvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
-                f' 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'
-                f' && powershell -Command "$a = Get-NetAdapter -Name \'{adapter}\';'
-                f' $a | Disable-NetAdapterPowerManagement -Confirm:$false"'
-            )
-            if _run_as_admin(cmd):
-                self._log(f"[OPTIMIZE] Power saving disabled for '{adapter}'")
-            else:
-                self._log("[OPTIMIZE] Operation cancelled or failed.")
-
-        elif IS_MAC:
-            messagebox.showinfo(
-                "Adapter Sleep — macOS",
-                "macOS handles adapter power management at the OS level.\n\n"
-                "To reduce random disconnects:\n"
-                "  System Settings -> Battery -> disable 'Enable Power Nap'\n"
-                "  System Settings -> Network -> Wi-Fi -> uncheck 'Ask to join hotspots'"
-            )
-            self._log("[OPTIMIZE] macOS: see System Settings > Battery for sleep options")
-
-        else:
-            if not adapter:
-                messagebox.showwarning("No Adapter", "Could not find an active network adapter.")
-                return
-            ok = messagebox.askyesno(
-                "Disable Adapter Power Saving",
-                f"Disable WiFi power saving for '{adapter}'.\n"
-                f"Requires admin. Continue?"
-            )
-            if not ok:
-                return
-            cmd = (
-                f"iw dev {adapter} set power_save off 2>/dev/null || "
-                f"iwconfig {adapter} power off 2>/dev/null"
-            )
-            if _run_as_admin(cmd):
-                self._log(f"[OPTIMIZE] Power saving disabled for '{adapter}'")
-            else:
-                self._log("[OPTIMIZE] Operation cancelled or failed.")
-
-    # ══════════════════════════════════════════════════════════════
-    # Actions
-    # ══════════════════════════════════════════════════════════════
-    def _set_loading(self, active):
-        self._running = active
-        if active:
-            self.progress_bar.start()
-        else:
-            self.progress_bar.stop()
-            self.progress_bar.set(0)
+            self._toast("Nicio parolă salvată - completeaz-o mai jos", C_AMBER)
+        webbrowser.open(f"http://{self._router_ip}")
+        self._log(f"[Router] Deschis http://{self._router_ip} (parola {'copiată' if pw else 'lipsă'})")
 
     def _open_router(self):
-        self._log(f"[Router] Opening http://{self._router_ip} ...")
+        self._log(f"[Router] Deschis http://{self._router_ip}")
         webbrowser.open(f"http://{self._router_ip}")
 
     def _toggle_pw_vis(self):
-        show = self.pw_show.get()
-        self.pw_entry.configure(show="" if show else "*")
+        self.pw_entry.configure(show="" if self.pw_entry.cget("show") else "•")
 
     def _copy_password(self):
         pw = self.pw_var.get().strip()
         if pw:
             self.clipboard_clear()
             self.clipboard_append(pw)
-            self._log("[Router] Password copied to clipboard")
+            self._toast("Parola copiată în clipboard")
         else:
-            self._log("[Router] No password set — type it first")
+            self._toast("Nicio parolă - scrie-o întâi", C_AMBER)
 
     def _save_password_action(self):
         pw = self.pw_var.get().strip()
-        if pw:
-            _save_config(pw)
-            self._saved_password = pw
-            self.pw_status.configure(text="✔ Saved", text_color=C_GREEN)
-            self._log("[Router] Password saved for future sessions")
-        else:
-            _save_config("")
-            self._saved_password = ""
-            self.pw_status.configure(text="Cleared", text_color=C_RED)
-            self._log("[Router] Saved password cleared")
+        _save_config(pw)
+        self._saved_password = pw
+        self.pw_status.configure(text="✓ salvată" if pw else "ștearsă",
+                                 text_color=C_GREEN if pw else C_RED)
+        self._toast("Parola salvată" if pw else "Parola ștearsă", C_GREEN if pw else C_AMBER)
 
-    def _open_and_copy(self):
-        self._copy_password()
-        self._open_router()
+    def _set_fast_dns(self):
+        adapter = _get_active_adapter()
+        if not adapter:
+            messagebox.showwarning("Fără adaptor", "Nu am găsit un adaptor de rețea activ.")
+            return
+        if not messagebox.askyesno("DNS rapid",
+                                   f"Setez adaptorul „{adapter}” pe:\n\n  1.1.1.1 (Cloudflare)\n  8.8.8.8 (Google)\n\n"
+                                   "Va apărea fereastra UAC. Continui?"):
+            return
+        cmd = (f'netsh interface ip set dns name="{adapter}" source=static addr=1.1.1.1'
+               f' && netsh interface ip add dns name="{adapter}" addr=8.8.8.8 index=2')
+        ok = _run_as_admin(cmd)
+        self._log("[OPTIMIZE] DNS setat pe 1.1.1.1 + 8.8.8.8" if ok else "[OPTIMIZE] Anulat sau eșuat.")
+        if ok:
+            self._toast("DNS rapid setat")
 
-    def _reboot_guide(self):
-        messagebox.showinfo(
-            "Router Reboot Guide",
-            "Option A — Via admin panel:\n"
-            "  1. Open Router Page\n"
-            "  2. Log in -> 'System' or 'Maintenance'\n"
-            "  3. Click 'Reboot' / 'Restart'\n"
-            "  4. Wait 2-3 minutes\n\n"
-            "Option B — Physically:\n"
-            "  1. Unplug the power cable\n"
-            "  2. Wait 30 seconds\n"
-            "  3. Plug it back in\n"
-            "  4. Wait 2-3 minutes for lights"
-        )
+    def _prevent_wifi_sleep(self):
+        adapter = _get_active_adapter()
+        if not adapter:
+            messagebox.showwarning("Fără adaptor", "Nu am găsit un adaptor de rețea activ.")
+            return
+        if not messagebox.askyesno("Oprire sleep adaptor",
+                                   f"Windows nu va mai opri „{adapter}” pentru economie de energie.\n\n"
+                                   "Va apărea fereastra UAC. Continui?"):
+            return
+        cmd = (f'powercfg /setdcvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
+               f' 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'
+               f' && powercfg /setacvalueindex SCHEME_CURRENT 19cbb8fa-5279-450e-9fac-8a3d5fedd0c1'
+               f' 12bbebe6-58d6-4636-95bb-3217ef867c1a 0'
+               f' && powershell -Command "Get-NetAdapter -Name \'{adapter}\''
+               f' | Disable-NetAdapterPowerManagement -Confirm:$false"')
+        ok = _run_as_admin(cmd)
+        self._log(f"[OPTIMIZE] Sleep oprit pentru „{adapter}”" if ok else "[OPTIMIZE] Anulat sau eșuat.")
+        if ok:
+            self._toast("Sleep-ul adaptorului oprit")
 
     def _run_fix(self, fix_type):
-        adapter = _get_active_adapter()
-        iface = adapter or ("en0" if IS_MAC else "eth0")
-
-        if IS_WIN:
-            commands = {
-                "dns_flush":       ("ipconfig /flushdns", "Flushing DNS cache"),
-                "ip_renew":        ("ipconfig /release && ipconfig /renew", "Renewing IP address"),
-                "winsock":         ("netsh winsock reset", "Resetting Winsock"),
-                "adapter_restart": (
-                    'powershell -Command "Get-NetAdapter | Where-Object {$_.Status -eq \'Up\'}'
-                    ' | Select-Object -First 1 | Restart-NetAdapter"',
-                    "Restarting network adapter"
-                ),
-                "net_reset": (
-                    "netsh int ip reset && netsh winsock reset && ipconfig /flushdns",
-                    "Full network reset"
-                ),
-            }
-        elif IS_MAC:
-            commands = {
-                "dns_flush":       ("dscacheutil -flushcache && killall -HUP mDNSResponder",
-                                    "Flushing DNS cache"),
-                "ip_renew":        (f"ipconfig set {iface} DHCP", "Renewing IP address"),
-                "winsock":         ("killall -HUP mDNSResponder", "Restarting DNS resolver"),
-                "adapter_restart": (f"ifconfig {iface} down && sleep 1 && ifconfig {iface} up",
-                                    "Restarting adapter"),
-                "net_reset": (
-                    f"dscacheutil -flushcache && killall -HUP mDNSResponder"
-                    f" && ipconfig set {iface} DHCP",
-                    "Full network reset"
-                ),
-            }
-        else:
-            commands = {
-                "dns_flush": (
-                    "resolvectl flush-caches 2>/dev/null || systemd-resolve --flush-caches 2>/dev/null",
-                    "Flushing DNS cache"
-                ),
-                "ip_renew": (
-                    f"dhclient -r {iface} 2>/dev/null; dhclient {iface} 2>/dev/null",
-                    "Renewing IP (DHCP)"
-                ),
-                "winsock": (
-                    "systemctl restart NetworkManager 2>/dev/null || service networking restart 2>/dev/null",
-                    "Restarting NetworkManager"
-                ),
-                "adapter_restart": (
-                    f"ip link set {iface} down && sleep 1 && ip link set {iface} up",
-                    "Restarting adapter"
-                ),
-                "net_reset": (
-                    f"resolvectl flush-caches 2>/dev/null; ip link set {iface} down;"
-                    f" sleep 1; ip link set {iface} up; dhclient {iface} 2>/dev/null",
-                    "Full network reset"
-                ),
-            }
-
+        commands = {
+            "dns_flush":       ("ipconfig /flushdns", "Curăț cache-ul DNS"),
+            "ip_renew":        ("ipconfig /release && ipconfig /renew", "Reînnoiesc IP-ul"),
+            "winsock":         ("netsh winsock reset", "Resetez Winsock"),
+            "adapter_restart": ('powershell -Command "Get-NetAdapter | Where-Object {$_.Status -eq \'Up\'}'
+                                ' | Select-Object -First 1 | Restart-NetAdapter"', "Repornesc adaptorul"),
+            "net_reset":       ("netsh int ip reset && netsh winsock reset && ipconfig /flushdns",
+                                "Reset complet de rețea"),
+        }
         cmd, msg = commands.get(fix_type, ("", ""))
         if not cmd:
             return
-
         self._log(f"\n[FIX] {msg}")
         self._set_loading(True)
-
-        # Windows commands that need admin but aren't running elevated yet
-        if IS_WIN and fix_type in _WIN_NEEDS_ADMIN and not _is_admin():
-            self._log("  Requires admin — opening elevated prompt...")
-            if _run_as_admin(cmd):
-                self._log("  Done (check the elevated window for output).\n")
-            else:
-                self._log("  Cancelled or failed to elevate.\n")
-            self.after(0, self._set_loading, False)
+        if fix_type in _WIN_NEEDS_ADMIN and not _is_admin():
+            self._log("  Cere admin - deschid fereastra UAC...")
+            ok = _run_as_admin(cmd)
+            self._log("  Gata (vezi fereastra elevată).\n" if ok else "  Anulat sau eșuat.\n")
+            self._toast(msg + " - pornit" if ok else "Anulat", C_GREEN if ok else C_AMBER)
+            self._set_loading(False)
             return
+        threading.Thread(target=self._exec, args=(cmd, msg), daemon=True).start()
 
-        threading.Thread(target=self._exec, args=(cmd,), daemon=True).start()
+    # ══════════════════════ Diagnostics ══════════════════════
+    def _set_loading(self, active):
+        if active:
+            self.progress.pack(side="right", padx=6)
+            self.progress.start()
+        else:
+            self.progress.stop()
+            self.progress.set(0)
+            self.progress.pack_forget()
+
+    def _auto_check(self):
+        threading.Thread(target=self._auto_worker, daemon=True).start()
+
+    def _auto_worker(self):
+        online = self._check_internet()
+        self.after(0, self._set_online, online)
+        r = self._ping(self._router_ip)
+        i = self._ping("8.8.8.8")
+        self.after(0, lambda: self._count_to("router", r))
+        self.after(0, lambda: self._count_to("inet", i))
+
+    def _set_online(self, online):
+        self._online = online
+
+    def _pulse_status(self):
+        """Gently pulsing status indicator, paced by elapsed time so the
+        breathing speed is identical on any monitor refresh rate."""
+        if self._online is None:
+            self.status_lbl.configure(text="●  se verifică...", text_color=C_MUTED)
+        else:
+            elapsed = time.perf_counter() - self._pulse_t0
+            t = (math.sin(elapsed * 1.8) + 1) / 2
+            if self._online:
+                self.status_lbl.configure(text="●  Conectat",
+                                          text_color=_lerp_color("#15803d", "#86efac", t))
+            else:
+                self.status_lbl.configure(text="●  Fără internet",
+                                          text_color=_lerp_color("#991b1b", "#fca5a5", t))
+        self.after(20, self._pulse_status)
 
     def _run_all_diags(self):
-        self._log("\n" + "-" * 44)
-        self._log("  Running full diagnostics ...")
-        self._log("-" * 44)
-        self.info_label.configure(text="")
+        self._log("\n" + "─" * 40)
+        self._log("  Diagnostic complet...")
         self._set_loading(True)
         threading.Thread(target=self._diag_worker, daemon=True).start()
 
-    def _run_speed_test(self):
-        self._log("\n[SPEED] Starting download speed test...")
-        self._set_loading(True)
-        threading.Thread(target=self._speed_test_worker, daemon=True).start()
-
-    def _speed_test_worker(self):
-        url = "https://speed.cloudflare.com/__down?bytes=5000000"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "network-doctor/2.0"})
-            t0 = time.perf_counter()
-            with urllib.request.urlopen(req, timeout=20) as r:
-                data = r.read()
-            elapsed = time.perf_counter() - t0
-            mb = len(data) / 1_000_000
-            mbps = (mb * 8) / elapsed
-            self._log(f"[SPEED] {mbps:.1f} Mbps  ({mb:.1f} MB in {elapsed:.1f}s)")
-        except Exception as e:
-            self._log(f"[SPEED] Failed: {e}")
-        finally:
-            self.after(0, self._set_loading, False)
-
     def _diag_worker(self):
         online = self._check_internet()
-        self.after(0, self._set_status, online)
-
-        info_text = self._collect_ip_info()
-        self._last_ip_info = info_text
-        self.after(0, self.info_label.configure, {"text": info_text, "text_color": C_SUB0})
+        self.after(0, self._set_online, online)
+        try:
+            out = _silent("ipconfig")
+            lines = [l.strip() for l in out.split("\n")
+                     if any(k in l for k in ["IPv4", "Default Gateway", "DNS Server", "Subnet Mask"])]
+            info = "\n".join(lines) or "Nicio informație IP găsită"
+        except Exception as e:
+            info = f"Eroare la citirea configurației: {e}"
+        self._last_ip_info = info
+        self.after(0, lambda: self.info_label.configure(text=info, text_color=C_SUB))
 
         for label, target in self._ping_targets:
             ms = self._ping(target)
             ok = ms is not None
-            color = C_GREEN if ok else C_RED
             text = f"{ms} ms" if ok else "TIMEOUT"
-            self.after(0, self._update_ping, label, text, color)
-            self._log(f"  Ping {label:<16} {text}")
+            self.after(0, lambda l=label, t=text, c=C_GREEN if ok else C_RED:
+                       self.ping_labels[l].configure(text=t, text_color=c))
+            self._log(f"  Ping {label:<14} {text}")
 
-        dns_ok = self._check_dns()
-        self._log(f"  DNS resolution         {'OK' if dns_ok else 'FAILED'}")
-        self._log("-" * 44 + "\n")
-        self.after(0, self._set_loading, False)
-
-    def _collect_ip_info(self):
         try:
-            if IS_WIN:
-                out = self._exec_sync("ipconfig")
-                lines = [
-                    l.strip() for l in out.split("\n")
-                    if any(k in l for k in ["IPv4", "Default Gateway", "DNS Server", "Subnet Mask"])
-                ]
-                return "\n".join(lines) if lines else "No IP info found"
-            else:
-                cmd = "ip addr && ip route" if not IS_MAC else "ifconfig && netstat -rn | grep -E 'default|UG'"
-                out = self._exec_sync(cmd)
-                lines = []
-                for line in out.split("\n"):
-                    s = line.strip()
-                    if s.startswith("inet ") or "default" in s.lower() or re.match(r"\d+:", s):
-                        lines.append(s)
-                return "\n".join(lines[:30]) if lines else out[:500]
-        except Exception as e:
-            return f"Could not read network info: {e}"
+            socket.gethostbyname("google.com")
+            self._log("  Rezoluție DNS       OK")
+        except Exception:
+            self._log("  Rezoluție DNS       EȘUAT")
+        self._log("─" * 40 + "\n")
+        self.after(0, self._set_loading, False)
 
     def _copy_ip_info(self):
         if self._last_ip_info:
             self.clipboard_clear()
             self.clipboard_append(self._last_ip_info)
-            self._log("[Diag] IP info copied to clipboard")
-        else:
-            self._log("[Diag] Run diagnostics first")
+            self._log("[Diag] Configurație IP copiată")
 
-    def _auto_check(self):
-        threading.Thread(target=self._auto_check_worker, daemon=True).start()
+    def _run_speed_test(self):
+        if self._speed_testing:
+            return
+        self._speed_testing = True
+        self.btn_speed.configure(state="disabled")
+        self._log("\n[SPEED] Test de download...")
+        self._pulse_tile("down")
+        self._speed_dots(0)
+        threading.Thread(target=self._speed_worker, daemon=True).start()
 
-    def _auto_check_worker(self):
-        online = self._check_internet()
-        self.after(0, self._set_status, online)
+    def _speed_dots(self, step):
+        if not self._speed_testing:
+            return
+        self.btn_speed.configure(text="Se testează" + "." * (step % 4))
+        self.after(320, self._speed_dots, step + 1)
 
-    def _set_status(self, online):
-        if online:
-            self.status_dot.configure(text_color=C_GREEN)
-            self.status_label.configure(text="Connected", text_color=C_GREEN)
-        else:
-            self.status_dot.configure(text_color=C_RED)
-            self.status_label.configure(text="No Internet", text_color=C_RED)
+    def _pulse_tile(self, key, t0=None):
+        """Pulse the tile border while its measurement runs, paced by
+        elapsed time so the pulse rate is the same on any monitor."""
+        if not self._speed_testing:
+            self.stat_tiles[key].configure(border_color=C_BORDER)
+            return
+        if t0 is None:
+            t0 = time.perf_counter()
+        elapsed = time.perf_counter() - t0
+        t = (math.sin(elapsed * 5.6) + 1) / 2
+        self.stat_tiles[key].configure(border_color=_lerp_color(C_BORDER, C_PURPLE, t))
+        self.after(16, self._pulse_tile, key, t0)
 
-    def _update_ping(self, label, text, color):
-        if label in self.ping_labels:
-            self.ping_labels[label].configure(text=text, text_color=color)
+    def _speed_worker(self):
+        url = "https://speed.cloudflare.com/__down?bytes=25000000"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "network-doctor/3.0"})
+            t0 = time.perf_counter()
+            total = 0
+            with urllib.request.urlopen(req, timeout=30) as r:
+                while True:
+                    chunk = r.read(262144)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    elapsed = time.perf_counter() - t0
+                    if elapsed > 0.3:
+                        mbps = (total * 8 / 1_000_000) / elapsed
+                        self.after(0, lambda m=mbps: self.stat_vals["down"].configure(text=f"{m:.0f}"))
+            elapsed = time.perf_counter() - t0
+            mbps = (total * 8 / 1_000_000) / elapsed
+            self.after(0, lambda: self.stat_vals["down"].configure(text=f"{mbps:.1f}"))
+            self._log(f"[SPEED] {mbps:.1f} Mbps  ({total / 1_000_000:.0f} MB în {elapsed:.1f}s)")
+        except Exception as e:
+            self.after(0, lambda: self.stat_vals["down"].configure(text="✕"))
+            self._log(f"[SPEED] Eșuat: {e}")
+        finally:
+            self._speed_testing = False
+            self.after(0, lambda: self.btn_speed.configure(state="normal", text="Test viteză"))
 
-    # ══════════════════════════════════════════════════════════════
-    # Network
-    # ══════════════════════════════════════════════════════════════
+    # ══════════════════════ Network helpers ══════════════════════
     def _check_internet(self):
         try:
             socket.create_connection(("8.8.8.8", 53), timeout=2)
@@ -1008,57 +849,35 @@ class NetworkDoctor(ctk.CTk):
         except Exception:
             return False
 
-    def _check_dns(self):
-        try:
-            socket.gethostbyname("google.com")
-            return True
-        except Exception:
-            return False
-
     def _ping(self, target):
         try:
-            param = "-n 1 -w 2000" if IS_WIN else "-c 1 -W 2"
-            out = subprocess.check_output(
-                f"ping {param} {target}", shell=True, stderr=subprocess.STDOUT,
-                timeout=4, text=True,
-            )
+            out = _silent(f"ping -n 1 -w 2000 {target}", 4)
             for line in out.split("\n"):
                 low = line.lower()
                 if "time=" in low:
                     return low.split("time=")[1].split("ms")[0].strip()
                 if "time<" in low:
                     return "<1"
-            return None
         except Exception:
-            return None
+            pass
+        return None
 
-    def _exec_sync(self, cmd):
+    def _exec(self, cmd, msg=""):
         try:
-            return subprocess.check_output(
-                cmd, shell=True, stderr=subprocess.STDOUT, timeout=15, text=True,
-            )
-        except Exception as e:
-            return str(e)
-
-    def _exec(self, cmd):
-        try:
-            out = subprocess.check_output(
-                cmd, shell=True, stderr=subprocess.STDOUT, timeout=30, text=True,
-            )
+            out = _silent(cmd, 30)
             for line in out.strip().split("\n"):
                 if line.strip():
                     self._log(f"    {line.strip()}")
-            self._log("  Done.\n")
+            self._log("  Gata.\n")
+            self.after(0, lambda: self._toast((msg or "Comanda") + " - gata"))
         except subprocess.CalledProcessError as e:
-            self._log(f"  Failed: {e.output.strip() if e.output else e}")
+            self._log(f"  Eșuat: {e.output.strip() if e.output else e}")
+            self.after(0, lambda: self._toast("A eșuat - vezi Diagnostic", C_RED))
         except Exception as e:
-            self._log(f"  Error: {e}")
+            self._log(f"  Eroare: {e}")
         finally:
             self.after(0, self._set_loading, False)
 
-    # ══════════════════════════════════════════════════════════════
-    # Logging
-    # ══════════════════════════════════════════════════════════════
     def _log(self, text):
         self.after(0, self._log_sync, text)
 
@@ -1066,11 +885,6 @@ class NetworkDoctor(ctk.CTk):
         self.log.configure(state="normal")
         self.log.insert("end", text + "\n")
         self.log.see("end")
-        self.log.configure(state="disabled")
-
-    def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
 
 

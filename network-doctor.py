@@ -12,6 +12,10 @@ import base64
 import re
 import time
 import math
+import os
+import sys
+import shutil
+import tempfile
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
@@ -39,6 +43,9 @@ ctk.set_appearance_mode("dark")
 
 CONFIG_FILE = Path.home() / ".network-doctor.json"
 NO_WINDOW = 0x08000000  # hide console flashes from subprocess calls
+
+APP_VERSION = "3.0.2"
+GITHUB_REPO = "CyberKird/network-doctor"
 
 # ── Palette (speedtest-inspired dark navy + teal) ────────────────
 C_BASE   = "#0b1120"
@@ -83,7 +90,7 @@ def _silent(cmd, timeout=15):
 def _detect_router_ip():
     try:
         out = _silent('powershell -Command "Get-NetRoute -DestinationPrefix \'0.0.0.0/0\''
-                      ' | Sort-Object RouteMetric | Select-Object -First 1'
+                      ' | Sort-Object { $_.RouteMetric + $_.InterfaceMetric } | Select-Object -First 1'
                       ' -ExpandProperty NextHop"', 5)
         ip = out.strip()
         if re.match(r"\d+\.\d+\.\d+\.\d+", ip):
@@ -113,19 +120,65 @@ def _is_admin():
 def _load_config():
     try:
         if CONFIG_FILE.exists():
-            data = json.loads(CONFIG_FILE.read_text())
-            return base64.b64decode(data.get("rp", "")).decode() or ""
+            return json.loads(CONFIG_FILE.read_text())
     except Exception:
         pass
-    return ""
+    return {}
 
 
-def _save_config(password=""):
+def _save_config(**kwargs):
+    """Merges kwargs into the existing config file so saving one setting
+    (e.g. auto_update) never wipes out another (e.g. the router password)."""
+    data = _load_config()
+    data.update(kwargs)
     try:
-        encoded = base64.b64encode(password.encode()).decode() if password else ""
-        CONFIG_FILE.write_text(json.dumps({"rp": encoded}))
+        CONFIG_FILE.write_text(json.dumps(data))
     except Exception:
         pass
+
+
+def _load_password():
+    try:
+        return base64.b64decode(_load_config().get("rp", "")).decode() or ""
+    except Exception:
+        return ""
+
+
+def _save_password(password=""):
+    encoded = base64.b64encode(password.encode()).decode() if password else ""
+    _save_config(rp=encoded)
+
+
+def _load_auto_update():
+    return bool(_load_config().get("au", True))
+
+
+def _save_auto_update(enabled):
+    _save_config(au=bool(enabled))
+
+
+def _parse_version(v):
+    try:
+        return tuple(int(p) for p in v.strip().lstrip("vV").split("."))
+    except Exception:
+        return (0,)
+
+
+def _fetch_latest_release():
+    """Returns (tag, exe_download_url) for the newest GitHub release, or
+    (None, None) if the check fails (offline, rate-limited, etc)."""
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={"User-Agent": "network-doctor", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode())
+        tag = data.get("tag_name", "")
+        asset_url = next((a["browser_download_url"] for a in data.get("assets", [])
+                          if a["name"].lower().endswith(".exe")), None)
+        return (tag, asset_url) if tag and asset_url else (None, None)
+    except Exception:
+        return None, None
 
 
 def _run_as_admin(cmd):
@@ -322,7 +375,8 @@ class NetworkDoctor(ctk.CTk):
         super().__init__()
         self.title("Network Doctor")
         self.configure(fg_color=C_BASE)
-        self._saved_password = _load_config()
+        self._saved_password = _load_password()
+        self._auto_update = _load_auto_update()
         self._router_ip = _detect_router_ip()
         self._ping_targets = [("Router", self._router_ip)] + PING_TARGETS_BASE
         self._last_ip_info = ""
@@ -338,6 +392,8 @@ class NetworkDoctor(ctk.CTk):
         self._fade_in()
         self.after(400, self._auto_check)
         self.after(900, self._pulse_status)
+        if self._auto_update:
+            self.after(1500, self._check_update_async)
 
     def _fade_in(self, t0=None):
         if t0 is None:
@@ -347,12 +403,76 @@ class NetworkDoctor(ctk.CTk):
         if t < 1.0:
             self.after(6, self._fade_in, t0)
 
+    # ══════════════════════ Auto-update ══════════════════════
+    def _check_update_async(self):
+        threading.Thread(target=self._check_update_worker, daemon=True).start()
+
+    def _check_update_worker(self):
+        tag, asset_url = _fetch_latest_release()
+        if not tag or not asset_url:
+            return
+        if _parse_version(tag) > _parse_version(APP_VERSION):
+            self._update_tag = tag
+            self._update_url = asset_url
+            self.after(0, self._show_update_available)
+
+    def _show_update_available(self):
+        self.update_btn.configure(text=f"↑  Update {self._update_tag} detected")
+        self.update_btn.pack(side="left", padx=(10, 0))
+
+    def _start_update(self):
+        if not getattr(self, "_update_url", None):
+            return
+        if not getattr(sys, "frozen", False):
+            # Running from source (python network-doctor.py) - there's no exe
+            # to swap, so just send the user to the release page instead.
+            webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
+            return
+        self.update_btn.configure(state="disabled", text="Se descarcă...")
+        threading.Thread(target=self._do_update, daemon=True).start()
+
+    def _do_update(self):
+        try:
+            exe_path = sys.executable
+            tmp_path = exe_path + ".new"
+            req = urllib.request.Request(self._update_url, headers={"User-Agent": "network-doctor"})
+            with urllib.request.urlopen(req, timeout=90) as r, open(tmp_path, "wb") as f:
+                shutil.copyfileobj(r, f)
+
+            # Windows won't let us overwrite our own running .exe, so a tiny
+            # batch script waits for this process to exit, swaps the file in,
+            # and relaunches it - then deletes itself.
+            pid = os.getpid()
+            bat_path = os.path.join(tempfile.gettempdir(), "network-doctor-update.bat")
+            script = (
+                "@echo off\r\n"
+                ":wait\r\n"
+                f'tasklist /fi "PID eq {pid}" | find "{pid}" >nul\r\n'
+                "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n"
+                f'move /y "{tmp_path}" "{exe_path}" >nul\r\n'
+                f'start "" "{exe_path}"\r\n'
+                'del "%~f0"\r\n'
+            )
+            Path(bat_path).write_text(script)
+            subprocess.Popen(["cmd", "/c", bat_path],
+                             creationflags=subprocess.DETACHED_PROCESS | NO_WINDOW)
+            self.after(300, self.destroy)
+        except Exception as e:
+            self.after(0, lambda: self.update_btn.configure(state="normal", text="Actualizare eșuată"))
+            self._log(f"[UPDATE] Eșuat: {e}")
+
     # ══════════════════════ UI ══════════════════════
     def _build_ui(self):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=24, pady=(18, 4))
         ctk.CTkLabel(head, text="NETWORK DOCTOR", font=ctk.CTkFont("Segoe UI", 17, "bold"),
                      text_color=C_TEXT).pack(side="left")
+        # Hidden until _check_update_worker finds a newer GitHub release.
+        self.update_btn = ctk.CTkButton(
+            head, text="", command=self._start_update,
+            height=24, corner_radius=12, font=ctk.CTkFont("Segoe UI", 10, "bold"),
+            fg_color=C_TEAL, hover_color="#5eead4", text_color=C_DARK,
+        )
         right = ctk.CTkFrame(head, fg_color="transparent")
         right.pack(side="right")
         self.status_lbl = ctk.CTkLabel(right, text="●  se verifică...", font=ctk.CTkFont("Segoe UI", 12, "bold"),
@@ -370,11 +490,12 @@ class NetworkDoctor(ctk.CTk):
         )
         self.tabs.pack(fill="both", expand=True, padx=16, pady=(0, 10))
         self.tabs._segmented_button.configure(font=ctk.CTkFont("Segoe UI", 13, "bold"), height=36)
-        for name in ("Acasă", "Reparații", "Diagnostic"):
+        for name in ("Acasă", "Reparații", "Diagnostic", "Setări"):
             self.tabs.add(name)
         self._build_home(self.tabs.tab("Acasă"))
         self._build_fixes(self.tabs.tab("Reparații"))
         self._build_diag(self.tabs.tab("Diagnostic"))
+        self._build_settings(self.tabs.tab("Setări"))
 
     def _card(self, parent, **pack):
         f = ctk.CTkFrame(parent, fg_color=C_CARD, corner_radius=14, border_width=1, border_color=C_BORDER)
@@ -618,6 +739,54 @@ class NetworkDoctor(ctk.CTk):
         self.log.pack(fill="both", expand=True, pady=(0, 4))
         self.log.configure(state="disabled")
 
+    # ── Tab: Setări ──
+    def _build_settings(self, tab):
+        tab.configure(fg_color="transparent")
+
+        c = self._card(tab, pady=(8, 8))
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=(14, 4))
+        ctk.CTkLabel(row, text="Actualizări automate", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                     text_color=C_TEXT).pack(side="left")
+        self.update_switch = ctk.CTkSwitch(
+            row, text="", command=self._toggle_auto_update,
+            width=44, switch_width=40, switch_height=20,
+            progress_color=C_TEALD, fg_color=C_CARD2, button_color=C_SUB,
+        )
+        self.update_switch.pack(side="right")
+        (self.update_switch.select if self._auto_update else self.update_switch.deselect)()
+        ctk.CTkLabel(
+            c, text="Verifică la pornire dacă există o versiune nouă pe GitHub și arată un buton "
+                    "de update dacă da. Dezactiveaz-o dacă nu vrei verificarea automată.",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=C_MUTED,
+            anchor="w", justify="left", wraplength=520,
+        ).pack(anchor="w", padx=14, pady=(0, 10))
+        ctk.CTkButton(
+            c, text="Verifică acum", command=self._check_update_async,
+            height=32, corner_radius=8, font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            fg_color=C_CARD2, hover_color=C_HOVER, text_color=C_TEXT,
+            border_width=1, border_color=C_BORDER,
+        ).pack(anchor="w", padx=14, pady=(0, 14))
+
+        about = self._card(tab, pady=(0, 8))
+        ctk.CTkLabel(about, text="Despre", font=ctk.CTkFont("Segoe UI", 12, "bold"),
+                     text_color=C_TEXT).pack(anchor="w", padx=14, pady=(14, 4))
+        ctk.CTkLabel(about, text=f"Network Doctor v{APP_VERSION}", font=ctk.CTkFont("Segoe UI", 11),
+                     text_color=C_SUB).pack(anchor="w", padx=14)
+        ctk.CTkButton(
+            about, text=f"github.com/{GITHUB_REPO}",
+            command=lambda: webbrowser.open(f"https://github.com/{GITHUB_REPO}"),
+            fg_color="transparent", hover_color=C_CARD2, text_color=C_TEAL,
+            font=ctk.CTkFont(family="Segoe UI", size=11, underline=True), anchor="w",
+            height=26, corner_radius=6,
+        ).pack(anchor="w", padx=10, pady=(2, 14))
+
+    def _toggle_auto_update(self):
+        self._auto_update = bool(self.update_switch.get())
+        _save_auto_update(self._auto_update)
+        self._toast("Actualizări automate activate" if self._auto_update else "Actualizări automate dezactivate",
+                    C_GREEN if self._auto_update else C_AMBER)
+
     # ══════════════════════ Actions ══════════════════════
     def _restart_router_flow(self):
         pw = self.pw_var.get().strip()
@@ -648,7 +817,7 @@ class NetworkDoctor(ctk.CTk):
 
     def _save_password_action(self):
         pw = self.pw_var.get().strip()
-        _save_config(pw)
+        _save_password(pw)
         self._saved_password = pw
         self.pw_status.configure(text="✓ salvată" if pw else "ștearsă",
                                  text_color=C_GREEN if pw else C_RED)

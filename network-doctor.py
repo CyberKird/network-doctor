@@ -82,10 +82,20 @@ def _silent(cmd, timeout=15):
 
 def _detect_router_ip():
     try:
+        out = _silent('powershell -Command "Get-NetRoute -DestinationPrefix \'0.0.0.0/0\''
+                      ' | Sort-Object RouteMetric | Select-Object -First 1'
+                      ' -ExpandProperty NextHop"', 5)
+        ip = out.strip()
+        if re.match(r"\d+\.\d+\.\d+\.\d+", ip):
+            return ip
+    except Exception:
+        pass
+    try:
         out = _silent("ipconfig", 5)
         for line in out.split("\n"):
-            if "Default Gateway" in line and ":" in line:
-                ip = line.split(":")[-1].strip()
+            if ":" in line:
+                parts = line.split(":")
+                ip = parts[-1].strip()
                 if re.match(r"\d+\.\d+\.\d+\.\d+", ip):
                     return ip
     except Exception:
@@ -756,7 +766,7 @@ class NetworkDoctor(ctk.CTk):
         try:
             out = _silent("ipconfig")
             lines = [l.strip() for l in out.split("\n")
-                     if any(k in l for k in ["IPv4", "Default Gateway", "DNS Server", "Subnet Mask"])]
+                     if re.search(r"(IPv4|Gateway|DNS|Subnet|implicit|masca)", l, re.I)]
             info = "\n".join(lines) or "Nicio informație IP găsită"
         except Exception as e:
             info = f"Eroare la citirea configurației: {e}"

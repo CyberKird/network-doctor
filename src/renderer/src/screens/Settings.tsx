@@ -91,7 +91,9 @@ export default function Settings({ settings, info, onChange, notify }: Props) {
   const savePassword = async (): Promise<void> => {
     const result = await window.api.setRouterPassword(password)
     if (result.ok) {
-      setPassword('')
+      // The field keeps what was saved. Clearing it here made a successful save
+      // look like the password had been lost, and there is nothing to hide: the
+      // eye is right there to mask it again.
       onChange({ ...settings, hasRouterPassword: password.length > 0 })
       notify(password ? 'Parola a fost salvată în seiful sistemului' : 'Parola a fost ștearsă')
     } else {

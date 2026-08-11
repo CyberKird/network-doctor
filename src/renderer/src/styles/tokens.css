@@ -192,12 +192,19 @@ button {
   background: var(--ink-faint);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+/*
+ * Motion is resolved in React - the OS preference by default, overridable in
+ * Settings - and stamped on the root element.
+ *
+ * It deliberately does not read (prefers-reduced-motion) directly. Windows
+ * reports "reduce" whenever its own animation effects are switched off, which
+ * many people do for performance rather than because motion bothers them, and
+ * a bare media query would leave this app frozen with no way to say otherwise.
+ */
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }

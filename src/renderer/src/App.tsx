@@ -63,6 +63,21 @@ export default function App() {
     return () => media.removeEventListener('change', apply)
   }, [settings])
 
+  // Same idea for motion. Windows reports "reduce" whenever its own animation
+  // effects are off, so the stored setting can override the system.
+  useEffect(() => {
+    if (!settings) return
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const apply = (): void => {
+      const reduced =
+        settings.motion === 'system' ? media.matches : settings.motion === 'off'
+      document.documentElement.dataset.motion = reduced ? 'reduced' : 'full'
+    }
+    apply()
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
+  }, [settings])
+
   return (
     <div className="app">
       <header className="app__top">

@@ -27,30 +27,56 @@ export interface ToolSpec {
   >
 }
 
-/** Interface carrying the default route - the one worth acting on. */
-export async function primaryInterface(): Promise<string | null> {
-  const cmd: Record<Platform, string> = {
-    win32:
-      'powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -eq \'Up\' } | Select-Object -First 1 -ExpandProperty Name"',
-    darwin: "route -n get default 2>/dev/null | awk '/interface:/{print $2}'",
-    linux: "ip route show default 2>/dev/null | awk '/default/{print $5; exit}'",
-  }
-  const { stdout } = await run(cmd[platform], 8000)
-  const name = stdout.trim().split('\n')[0]?.trim() ?? ''
-  return name && isSafeInterfaceName(name) ? name : null
+export interface DefaultRoute {
+  /** Interface carrying the traffic - the one worth acting on. */
+  iface: string
+  /** Its gateway - the router the hero button opens. */
+  gateway: string
 }
 
-/** Default gateway address - the router the hero button opens. */
-export async function gatewayAddress(): Promise<string | null> {
+/**
+ * The route the OS would actually send traffic over, as one answer.
+ *
+ * Interface and gateway have to come from the same route or they can end up
+ * describing different networks - the Ethernet card with the Wi-Fi router's
+ * address. Picking the route is subtler than it looks on Windows: the
+ * effective cost is RouteMetric + the interface's own metric, so a route with
+ * metric 0 on a slow interface still loses to metric 1 on a fast one. Sorting
+ * by RouteMetric alone selects the wrong adapter whenever both are connected.
+ *
+ * Virtual adapters need no special handling: a VPN only wins if it genuinely
+ * owns the best default route, which is exactly the right answer.
+ */
+export async function defaultRoute(): Promise<DefaultRoute | null> {
   const cmd: Record<Platform, string> = {
     win32:
-      'powershell -NoProfile -Command "(Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Sort-Object RouteMetric | Select-Object -First 1).NextHop"',
-    darwin: "route -n get default 2>/dev/null | awk '/gateway:/{print $2}'",
-    linux: "ip route show default 2>/dev/null | awk '/default/{print $3; exit}'",
+      'powershell -NoProfile -Command "Get-NetRoute -DestinationPrefix \'0.0.0.0/0\'' +
+      " | Where-Object { $_.NextHop -ne '0.0.0.0' }" +
+      " | Select-Object InterfaceAlias,NextHop,@{n='T';e={$_.RouteMetric +" +
+      ' (Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4).InterfaceMetric}}' +
+      " | Sort-Object T | Select-Object -First 1" +
+      " | ForEach-Object { $_.InterfaceAlias + '|' + $_.NextHop }\"",
+    darwin:
+      "route -n get default 2>/dev/null | awk '/gateway:/{g=$2} /interface:/{d=$2} END{ if (d && g) print d \"|\" g }'",
+    // Lowest metric wins here too; an absent metric field means 0.
+    linux:
+      'ip -4 route show default 2>/dev/null | awk \'{ m=0; g=""; d=""; for (i=1;i<=NF;i++) { if ($i=="via") g=$(i+1); if ($i=="dev") d=$(i+1); if ($i=="metric") m=$(i+1) } if (d && g) print m "|" d "|" g }\' | sort -n | head -1 | cut -d"|" -f2,3',
   }
+
   const { stdout } = await run(cmd[platform], 8000)
-  const ip = stdout.trim().split('\n')[0]?.trim() ?? ''
-  return isIpAddress(ip) ? ip : null
+  const [iface, gateway] = stdout.trim().split('\n')[0]?.trim().split('|') ?? []
+
+  if (!iface || !gateway) return null
+  if (!isSafeInterfaceName(iface) || !isIpAddress(gateway)) return null
+  return { iface, gateway }
+}
+
+export async function primaryInterface(): Promise<string | null> {
+  return (await defaultRoute())?.iface ?? null
+}
+
+export async function gatewayAddress(): Promise<string | null> {
+  return (await defaultRoute())?.gateway ?? null
 }
 
 /** Human-readable IP configuration, for the Diagnostics panel. */

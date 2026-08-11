@@ -47,10 +47,14 @@ export default function Tools({ notify, isAdmin }: Props) {
       </div>
 
       <div className="tool-grid">
-        {tools.map((tool) => {
+        {tools.map((tool, i) => {
           const pending = confirming === tool.id
           return (
-            <div key={tool.id} className={`tool ${tool.available ? 'surface' : 'surface--sunken'}`}>
+            <div
+              key={tool.id}
+              className={`tool stagger ${tool.available ? 'surface' : 'surface--sunken'}`}
+              style={{ '--i': i } as React.CSSProperties}
+            >
               <div className="row spread grow" style={{ width: '100%' }}>
                 <strong>{tool.label}</strong>
                 {tool.elevated && tool.available && <span className="tool__badge">admin</span>}

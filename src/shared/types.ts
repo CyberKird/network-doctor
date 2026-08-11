@@ -1,4 +1,5 @@
 export type ThemeMode = 'light' | 'dark' | 'system'
+export type MotionMode = 'system' | 'on' | 'off'
 
 export interface PingResult {
   label: string
@@ -37,6 +38,7 @@ export interface SpeedProgress {
 
 export interface AppSettings {
   theme: ThemeMode
+  motion: MotionMode
   autoUpdate: boolean
   hasRouterPassword: boolean
 }

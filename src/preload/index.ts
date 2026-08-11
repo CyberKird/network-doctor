@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AppSettings,
   DiagnosticsReport,
+  MotionMode,
   PlatformInfo,
   SpeedProgress,
   ThemeMode,
@@ -22,7 +23,8 @@ const api = {
   listTools: (): Promise<ToolView[]> => ipcRenderer.invoke('tools:list'),
   runTool: (id: string): Promise<ToolRunResult> => ipcRenderer.invoke('tools:run', id),
 
-  startSpeedTest: (): Promise<number> => ipcRenderer.invoke('speed:start'),
+  /** Mb/s, or null if the user stopped the test. */
+  startSpeedTest: (): Promise<number | null> => ipcRenderer.invoke('speed:start'),
   cancelSpeedTest: (): Promise<void> => ipcRenderer.invoke('speed:cancel'),
   onSpeedProgress: (cb: (p: SpeedProgress) => void): (() => void) => {
     const listener = (_e: unknown, p: SpeedProgress): void => cb(p)
@@ -41,10 +43,13 @@ const api = {
 
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
   setTheme: (mode: ThemeMode): Promise<boolean> => ipcRenderer.invoke('settings:setTheme', mode),
+  setMotion: (mode: MotionMode): Promise<boolean> => ipcRenderer.invoke('settings:setMotion', mode),
   setAutoUpdate: (value: boolean): Promise<boolean> =>
     ipcRenderer.invoke('settings:setAutoUpdate', value),
   setRouterPassword: (value: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('settings:setPassword', value),
+  revealRouterPassword: (): Promise<string | null> =>
+    ipcRenderer.invoke('settings:revealPassword'),
 }
 
 export type NetworkDoctorApi = typeof api

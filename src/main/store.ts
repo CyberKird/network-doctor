@@ -1,16 +1,17 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app, safeStorage } from 'electron'
-import type { ThemeMode } from '../shared/types'
+import type { MotionMode, ThemeMode } from '../shared/types'
 
 interface StoredConfig {
   theme: ThemeMode
+  motion: MotionMode
   autoUpdate: boolean
   /** Router password, encrypted by the OS keystore. Base64 of the cipher text. */
   routerPassword?: string
 }
 
-const DEFAULTS: StoredConfig = { theme: 'system', autoUpdate: true }
+const DEFAULTS: StoredConfig = { theme: 'system', motion: 'system', autoUpdate: true }
 
 function configPath(): string {
   return join(app.getPath('userData'), 'settings.json')
@@ -42,6 +43,14 @@ export function getTheme(): ThemeMode {
 
 export function setTheme(theme: ThemeMode): void {
   persist({ ...load(), theme })
+}
+
+export function getMotion(): MotionMode {
+  return load().motion
+}
+
+export function setMotion(motion: MotionMode): void {
+  persist({ ...load(), motion })
 }
 
 export function getAutoUpdate(): boolean {

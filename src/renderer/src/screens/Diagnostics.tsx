@@ -59,8 +59,12 @@ export default function Diagnostics({ notify, onOnlineChange }: Props) {
       </div>
 
       <div className="ping-list">
-        {(report?.pings ?? []).map((p) => (
-          <div key={p.label} className="ping-row">
+        {(report?.pings ?? []).map((p, i) => (
+          <div
+            key={p.label}
+            className="ping-row stagger"
+            style={{ '--i': i } as React.CSSProperties}
+          >
             <span>
               <strong>{p.label}</strong>{' '}
               <span className="card__subtitle" style={{ display: 'inline' }}>

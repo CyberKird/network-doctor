@@ -183,6 +183,22 @@
   animation-duration: 0.9s;
 }
 
+/* While the router page is opening, the disc breathes a soft ring so the
+   click has a visible consequence even though the browser steals focus. */
+@keyframes hero-pulse {
+  0%,
+  100% {
+    box-shadow: var(--e5);
+  }
+  50% {
+    box-shadow: var(--e5), 0 0 0 10px rgb(124 199 170 / 0.16);
+  }
+}
+
+.hero--busy .hero__disc {
+  animation: hero-pulse 1.4s ease-in-out infinite;
+}
+
 .hero__ripple {
   position: absolute;
   inset: 8px;
@@ -335,6 +351,58 @@
 .grow {
   flex: 1;
   min-width: 0;
+}
+
+/* ── Split action (running task + stop) ───────────────────────── */
+/*
+ * While a task runs, its button splits: the label keeps the full-width look
+ * and a narrow stop button appears beside it. The stop is deliberately small
+ * so it cannot be hit by someone aiming for the main control.
+ */
+.split {
+  display: flex;
+  gap: var(--s2);
+  animation: split-open var(--d-base) var(--ease-spring);
+}
+
+@keyframes split-open {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.split__main {
+  flex: 1;
+  min-width: 0;
+  cursor: default;
+  /* It is a status readout, not something to press. */
+  box-shadow: var(--inset);
+}
+
+.split__stop {
+  flex: none;
+  width: 52px;
+  padding: 0;
+}
+
+/* ── Staggered entrance ───────────────────────────────────────── */
+/*
+ * Rows and cards rise in one after another rather than all at once. `backwards`
+ * holds the start frame during the delay, otherwise every item flashes at full
+ * opacity before its turn. --i is set per item in JSX; the cap keeps a long
+ * list from making the last row wait.
+ */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+}
+
+.stagger {
+  animation: rise-in var(--d-base) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--i, 0), 8) * 45ms);
 }
 
 /* ── Toast ────────────────────────────────────────────────────── */

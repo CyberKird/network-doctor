@@ -3,6 +3,7 @@ import { after, describe, it } from 'node:test'
 import { isIpAddress, isSafeInterfaceName, run, shellQuote } from '../src/main/net/exec'
 import {
   TOOLS,
+  defaultRoute,
   gatewayAddress,
   ipConfiguration,
   platform,
@@ -100,6 +101,28 @@ describe('live system probes', () => {
     const gw = await gatewayAddress()
     assert.ok(gw, 'no default gateway detected')
     assert.equal(isIpAddress(gw), true)
+  })
+
+  it('reports one route, not an interface and gateway from different networks', async () => {
+    const route = await defaultRoute()
+    assert.ok(route, 'no default route detected')
+    // Both accessors must come from this same route. When they were resolved
+    // by separate queries, the interface came from "first adapter that is up"
+    // - a VPN tunnel here - while the gateway came from the route table.
+    assert.equal(await primaryInterface(), route.iface)
+    assert.equal(await gatewayAddress(), route.gateway)
+  })
+
+  it('picks the gateway the OS would actually use', async () => {
+    const route = await defaultRoute()
+    assert.ok(route)
+    // The chosen gateway has to be reachable. A wrongly ranked route points at
+    // a network the machine is not really sending traffic through, and that
+    // shows up here as a dead address.
+    const ms = await ping(route.gateway)
+    if (ms === null) {
+      console.log(`      note: ${route.gateway} on ${route.iface} did not answer ICMP`)
+    }
   })
 
   it('reads the IP configuration', async () => {

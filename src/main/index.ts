@@ -93,16 +93,23 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('speed:start', async (event) => {
+  // Resolves to the measured Mb/s, or null when the user stopped it. Cancelling
+  // is a normal outcome, so it must not surface as a rejected invoke that the
+  // renderer would have to tell apart from a real failure by reading text.
+  ipcMain.handle('speed:start', async (event): Promise<number | null> => {
     speedAbort?.abort()
-    speedAbort = new AbortController()
+    const controller = new AbortController()
+    speedAbort = controller
     try {
       return await measureDownload(
         (p) => event.sender.send('speed:progress', p),
-        speedAbort.signal,
+        controller.signal,
       )
+    } catch (err) {
+      if (controller.signal.aborted) return null
+      throw err
     } finally {
-      speedAbort = null
+      if (speedAbort === controller) speedAbort = null
     }
   })
 
@@ -129,9 +136,16 @@ function registerIpc(): void {
 
   ipcMain.handle('settings:get', (): AppSettings => ({
     theme: store.getTheme(),
+    motion: store.getMotion(),
     autoUpdate: store.getAutoUpdate(),
     hasRouterPassword: store.hasRouterPassword(),
   }))
+
+  ipcMain.handle('settings:setMotion', (_e, mode: unknown) => {
+    if (mode !== 'system' && mode !== 'on' && mode !== 'off') return false
+    store.setMotion(mode)
+    return true
+  })
 
   ipcMain.handle('settings:setTheme', (_e, mode: unknown) => {
     if (mode !== 'light' && mode !== 'dark' && mode !== 'system') return false
@@ -149,6 +163,11 @@ function registerIpc(): void {
     if (typeof value !== 'string') return { ok: false, error: 'Parolă invalidă' }
     return store.setRouterPassword(value)
   })
+
+  // Decrypting is deliberately its own call rather than part of settings:get,
+  // so the password only crosses into the renderer when the user asks to see
+  // it - not on every settings read.
+  ipcMain.handle('settings:revealPassword', (): string | null => store.getRouterPassword())
 
   ipcMain.handle('shell:openExternal', (_e, url: unknown) => {
     if (typeof url !== 'string' || !/^https?:\/\//.test(url)) return false

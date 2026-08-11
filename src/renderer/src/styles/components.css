@@ -249,6 +249,31 @@
   color: var(--ink-faint);
 }
 
+/* Icon button living inside a field, e.g. reveal-password. */
+.field__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition:
+    color var(--d-fast) var(--ease-out),
+    background-color var(--d-fast) var(--ease-out);
+}
+
+.field__action:hover,
+.field__action[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--surface);
+}
+
 /* ── Toggle ───────────────────────────────────────────────────── */
 .toggle {
   position: relative;

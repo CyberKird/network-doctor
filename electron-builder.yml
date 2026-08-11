@@ -1,0 +1,53 @@
+appId: com.cyberkird.networkdoctor
+productName: Network Doctor
+copyright: MIT
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - '!out/tests/**'
+  - package.json
+
+# Renderer assets are already bundled by Vite, so asar packing is safe and
+# keeps the install a single file rather than thousands of small ones.
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  # Unsigned builds get a SmartScreen warning until the download earns
+  # reputation. Signing needs a certificate in CSC_LINK / CSC_KEY_PASSWORD.
+  signAndEditExecutable: true
+
+nsis:
+  # Without an ${arch} in the name, both architectures land in one 186 MB
+  # installer and every user downloads the half they cannot run.
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  # The repair tools shell out, which the hardened runtime blocks unless the
+  # app is signed and notarised. Left on so a signed build behaves correctly.
+  hardenedRuntime: true
+
+linux:
+  category: Utility
+  target:
+    - AppImage
+    - deb
+
+publish:
+  provider: github
+  owner: CyberKird
+  repo: network-doctor

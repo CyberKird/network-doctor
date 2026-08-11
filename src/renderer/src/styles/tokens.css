@@ -1,0 +1,203 @@
+/*
+ * Design tokens for the soft-surface (neumorphic) look.
+ *
+ * The whole style rests on one rule: light falls from the top-left. Every
+ * raised element therefore gets a pale highlight up-left and a warm shadow
+ * down-right, and anything recessed gets the same pair inverted. Elevation is
+ * just how far apart those two get - which is why the levels are a single
+ * scale rather than five hand-picked shadows.
+ */
+
+:root {
+  /* ── Palette: light ─────────────────────────────────────────── */
+  --canvas: #eeece7;
+  --surface: #f4f2ee;
+  --surface-raised: #f7f6f2;
+  --surface-sunken: #e8e5df;
+
+  --primary: #a3d9c4;
+  --primary-strong: #7cc7aa;
+  --primary-ink: #1f5a48;
+
+  --border: #e0ddd6;
+  --border-strong: #cfcbc2;
+
+  --ink: #3b3b39;
+  --ink-muted: #7e7d77;
+  --ink-faint: #a4a29b;
+
+  --success: #a3d9c4;
+  --success-ink: #1f5a48;
+  --warning: #f1d98c;
+  --warning-ink: #6b5410;
+  --danger: #e9918f;
+  --danger-ink: #6d2523;
+
+  /* Shadow colours are separated from geometry so the dark theme only has to
+     swap these two, not restate every elevation level. */
+  --shade: 168 163 152;
+  --shade-alpha: 0.3;
+  --light: 255 255 255;
+  --light-alpha: 0.9;
+
+  /* ── Elevation ──────────────────────────────────────────────── */
+  --e1:
+    -1px -1px 3px rgb(var(--light) / var(--light-alpha)),
+    1px 1px 3px rgb(var(--shade) / var(--shade-alpha));
+  --e2:
+    -2px -2px 6px rgb(var(--light) / var(--light-alpha)),
+    2px 2px 6px rgb(var(--shade) / var(--shade-alpha));
+  --e3:
+    -3px -3px 9px rgb(var(--light) / var(--light-alpha)),
+    4px 4px 10px rgb(var(--shade) / var(--shade-alpha));
+  --e4:
+    -5px -5px 14px rgb(var(--light) / var(--light-alpha)),
+    6px 6px 16px rgb(var(--shade) / var(--shade-alpha));
+  --e5:
+    -7px -7px 20px rgb(var(--light) / var(--light-alpha)),
+    9px 9px 24px rgb(var(--shade) / var(--shade-alpha));
+
+  --inset:
+    inset 2px 2px 5px rgb(var(--shade) / var(--shade-alpha)),
+    inset -2px -2px 5px rgb(var(--light) / var(--light-alpha));
+  --inset-deep:
+    inset 3px 3px 8px rgb(var(--shade) / calc(var(--shade-alpha) * 1.25)),
+    inset -3px -3px 8px rgb(var(--light) / var(--light-alpha));
+
+  --focus-ring: 0 0 0 3px rgb(124 199 170 / 0.45);
+
+  /* ── Radius ─────────────────────────────────────────────────── */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  /* ── Spacing ────────────────────────────────────────────────── */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+
+  /* ── Type ───────────────────────────────────────────────────── */
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display', 'Segoe UI',
+    Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'Cascadia Code', 'SF Mono', Consolas, 'Liberation Mono', monospace;
+
+  --t-display: 2.25rem;
+  --t-h1: 1.5rem;
+  --t-h2: 1.125rem;
+  --t-body: 0.9375rem;
+  --t-caption: 0.8125rem;
+  --t-micro: 0.6875rem;
+
+  /* ── Motion ─────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --d-fast: 120ms;
+  --d-base: 220ms;
+  --d-slow: 380ms;
+}
+
+:root[data-theme='dark'] {
+  --canvas: #22252a;
+  --surface: #282c32;
+  --surface-raised: #2d3138;
+  --surface-sunken: #1d2024;
+
+  --primary: #6bbfa3;
+  --primary-strong: #86d3b7;
+  --primary-ink: #08201a;
+
+  --border: #343941;
+  --border-strong: #434952;
+
+  --ink: #e7e5e0;
+  --ink-muted: #9b9a94;
+  --ink-faint: #6f6e69;
+
+  --success: #6bbfa3;
+  --success-ink: #08201a;
+  --warning: #d9bd6a;
+  --warning-ink: #2a2107;
+  --danger: #d2726f;
+  --danger-ink: #2b0f0e;
+
+  /* In a dark room the highlight has to nearly vanish, or every surface looks
+     like it is glowing rather than catching light. */
+  --shade: 0 0 0;
+  --shade-alpha: 0.45;
+  --light: 255 255 255;
+  --light-alpha: 0.045;
+
+  --focus-ring: 0 0 0 3px rgb(107 191 163 / 0.4);
+}
+
+/* ── Reset ────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* The window chrome is the app's own; text selection everywhere would make
+     it feel like a web page. Re-enabled per element where it is useful. */
+  user-select: none;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid var(--canvas);
+  border-radius: var(--r-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

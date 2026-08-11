@@ -1,0 +1,14 @@
+node_modules/
+out/
+release/
+dist/
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Signing material must never be committed.
+*.pfx
+*.p12
+.env
+.env.*

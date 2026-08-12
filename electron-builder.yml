@@ -43,6 +43,13 @@ mac:
 
 linux:
   category: Utility
+  # .deb refuses to build without a maintainer. GitHub's noreply address keeps
+  # a contact in the package metadata without publishing a personal one.
+  maintainer: CyberKird <CyberKird@users.noreply.github.com>
+  # Installs the .desktop entry under desktopName and sets StartupWMClass to
+  # match, which is what lets a desktop environment tie the running window to
+  # its launcher icon instead of showing a generic one.
+  syncDesktopName: true
   target:
     - AppImage
     - deb

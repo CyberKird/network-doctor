@@ -16,6 +16,7 @@ files:
 asar: true
 
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64, arm64]
@@ -33,6 +34,7 @@ nsis:
   deleteAppDataOnUninstall: false
 
 mac:
+  icon: build/icon.png
   category: public.app-category.utilities
   target:
     - target: dmg

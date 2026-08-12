@@ -12,3 +12,6 @@ dist/
 *.p12
 .env
 .env.*
+
+# TypeScript incremental build state
+*.tsbuildinfo

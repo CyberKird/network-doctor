@@ -135,8 +135,10 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, var(--surface-raised), var(--surface));
-  box-shadow: var(--e5);
+  /* Offsetting the highlight further up-left than the geometric centre is what
+     makes a flat circle read as a sphere. */
+  background: radial-gradient(circle at 30% 24%, var(--surface-raised) 0%, var(--surface) 58%, var(--surface-sunken) 100%);
+  box-shadow: var(--e5), var(--pop);
   transition:
     box-shadow var(--d-base) var(--ease-out),
     transform var(--d-base) var(--ease-out);
@@ -286,10 +288,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-  padding: 10px 16px;
+  padding: 13px 18px;
   border-radius: var(--r-md);
-  background: var(--surface);
-  box-shadow: var(--e1);
+  background-color: var(--surface);
+  background-image: var(--sheen);
+  box-shadow: var(--e2), var(--pop);
 }
 
 .ping-row__value {

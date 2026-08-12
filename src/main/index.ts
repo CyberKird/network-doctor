@@ -20,6 +20,10 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     titleBarStyle: platform === 'darwin' ? 'hiddenInset' : 'default',
+    // Packaged builds take their icon from electron-builder; this is what the
+    // window and taskbar use when running from source, and on Linux where the
+    // icon is not baked into the binary.
+    icon: join(__dirname, '../../build/icon.png'),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#22252a' : '#eeece7',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

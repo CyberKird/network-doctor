@@ -2,31 +2,34 @@
 
 /* ── Surfaces ─────────────────────────────────────────────────── */
 .surface {
-  background: var(--surface);
+  background-color: var(--surface);
+  background-image: var(--sheen);
   border-radius: var(--r-lg);
-  box-shadow: var(--e2);
+  box-shadow: var(--e2), var(--pop);
 }
 
 .surface--flat {
-  box-shadow: var(--e1);
+  box-shadow: var(--e1), var(--pop);
 }
 .surface--raised {
-  background: var(--surface-raised);
-  box-shadow: var(--e3);
+  background-color: var(--surface-raised);
+  box-shadow: var(--e3), var(--pop);
 }
 .surface--floating {
-  background: var(--surface-raised);
-  box-shadow: var(--e4);
+  background-color: var(--surface-raised);
+  box-shadow: var(--e4), var(--pop);
 }
 .surface--sunken {
-  background: var(--surface-sunken);
+  background-color: var(--surface-sunken);
+  background-image: none;
   box-shadow: var(--inset);
 }
 
 .card {
-  background: var(--surface);
+  background-color: var(--surface);
+  background-image: var(--sheen);
   border-radius: var(--r-lg);
-  box-shadow: var(--e2);
+  box-shadow: var(--e2), var(--pop);
   padding: var(--s5);
 }
 
@@ -49,15 +52,16 @@
   align-items: center;
   justify-content: center;
   gap: var(--s2);
-  padding: 10px 20px;
+  padding: 12px 22px;
   border: 0;
   border-radius: var(--r-pill);
-  background: var(--surface-raised);
-  box-shadow: var(--e2);
+  background-color: var(--surface-raised);
+  background-image: var(--sheen);
+  box-shadow: var(--e2), var(--pop);
   font-size: var(--t-body);
   font-weight: 600;
   cursor: pointer;
-  /* Only the two properties that actually change are transitioned; animating
+  /* Only the properties that actually change are transitioned; animating
      `all` would drag layout work into every hover. */
   transition:
     box-shadow var(--d-base) var(--ease-out),
@@ -66,45 +70,49 @@
 }
 
 .btn:hover:not(:disabled) {
-  box-shadow: var(--e3);
-  transform: translateY(-1px);
+  box-shadow: var(--e3), var(--pop);
+  transform: translateY(-1.5px);
 }
 
-/* Pressing pushes the surface into the page - the inset is the whole point. */
+/* Pressing pushes the surface into the page - the inset is the whole point,
+   and the sheen has to go with it or the face stays lit while sunk. */
 .btn:active:not(:disabled) {
+  background-image: none;
   box-shadow: var(--inset);
-  transform: translateY(0);
+  transform: translateY(1px);
 }
 
 .btn:disabled {
   color: var(--ink-faint);
+  background-image: none;
   box-shadow: var(--e1);
   cursor: not-allowed;
 }
 
 .btn--primary {
-  background: var(--primary);
+  background-color: var(--primary);
   color: var(--primary-ink);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: var(--primary-strong);
+  background-color: var(--primary-strong);
 }
 
 .btn--danger {
-  background: var(--danger);
+  background-color: var(--danger);
   color: var(--danger-ink);
 }
 
 .btn--ghost {
-  background: transparent;
+  background-color: transparent;
+  background-image: none;
   box-shadow: none;
   color: var(--ink-muted);
 }
 
 .btn--ghost:hover:not(:disabled) {
-  background: var(--surface);
-  box-shadow: var(--e1);
+  background-color: var(--surface);
+  box-shadow: var(--e1), var(--pop);
 }
 
 .btn--block {
@@ -116,32 +124,40 @@
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
-  padding: 6px 14px;
+  padding: 8px 16px;
   border: 0;
   border-radius: var(--r-pill);
-  background: var(--surface-raised);
-  box-shadow: var(--e1);
+  background-color: var(--surface-raised);
+  background-image: var(--sheen);
+  box-shadow: var(--e2), var(--pop);
   font-size: var(--t-caption);
   font-weight: 600;
   color: var(--ink-muted);
   cursor: pointer;
   transition:
     box-shadow var(--d-base) var(--ease-out),
+    transform var(--d-fast) var(--ease-out),
     background-color var(--d-base) var(--ease-out),
     color var(--d-base) var(--ease-out);
 }
 
+.chip:hover:not(:disabled):not([aria-pressed='true']) {
+  transform: translateY(-1px);
+  box-shadow: var(--e3), var(--pop);
+}
+
 .chip[aria-pressed='true'] {
-  background: var(--primary);
+  background-color: var(--primary);
   color: var(--primary-ink);
-  box-shadow: var(--e2);
+  box-shadow: var(--e3), var(--pop);
 }
 
 .chip:disabled {
   color: var(--ink-faint);
   cursor: not-allowed;
-  box-shadow: none;
-  background: var(--surface-sunken);
+  background-image: none;
+  box-shadow: var(--inset);
+  background-color: var(--surface-sunken);
 }
 
 /* ── Alerts ───────────────────────────────────────────────────── */
@@ -149,23 +165,24 @@
   display: flex;
   align-items: center;
   gap: var(--s3);
-  padding: 12px 18px;
+  padding: 14px 20px;
   border-radius: var(--r-pill);
-  box-shadow: var(--e2);
+  background-image: var(--sheen);
+  box-shadow: var(--e3), var(--pop);
   font-size: var(--t-body);
   font-weight: 550;
 }
 
 .alert--success {
-  background: var(--success);
+  background-color: var(--success);
   color: var(--success-ink);
 }
 .alert--warning {
-  background: var(--warning);
+  background-color: var(--warning);
   color: var(--warning-ink);
 }
 .alert--error {
-  background: var(--danger);
+  background-color: var(--danger);
   color: var(--danger-ink);
 }
 
@@ -182,7 +199,7 @@
   padding: var(--s1);
   border-radius: var(--r-pill);
   background: var(--surface-sunken);
-  box-shadow: var(--inset);
+  box-shadow: var(--inset-deep);
 }
 
 .tabs__pill {
@@ -190,8 +207,10 @@
   top: var(--s1);
   bottom: var(--s1);
   border-radius: var(--r-pill);
-  background: var(--primary);
-  box-shadow: var(--e2);
+  background-color: var(--primary);
+  background-image: var(--sheen);
+  /* Sits in a groove, so it needs enough elevation to clear the inset walls. */
+  box-shadow: var(--e3), var(--pop);
   /* Driven by left/width from React state; the compositor interpolates these
      against the display's refresh, so no manual frame pacing is needed. */
   transition:
@@ -301,8 +320,9 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--surface-raised);
-  box-shadow: var(--e2);
+  background-color: var(--surface-raised);
+  background-image: var(--sheen);
+  box-shadow: var(--e3), var(--pop);
   transition: transform var(--d-base) var(--ease-spring);
 }
 
@@ -315,15 +335,16 @@
   display: flex;
   flex-direction: column;
   gap: var(--s1);
-  padding: var(--s4) var(--s5);
+  padding: var(--s5);
   border-radius: var(--r-lg);
-  background: var(--surface);
-  box-shadow: var(--e2);
+  background-color: var(--surface);
+  background-image: var(--sheen);
+  box-shadow: var(--e3), var(--pop);
   transition: box-shadow var(--d-base) var(--ease-out);
 }
 
 .stat--active {
-  box-shadow: var(--e3), 0 0 0 2px var(--primary);
+  box-shadow: var(--e4), var(--pop), 0 0 0 2px var(--primary);
 }
 
 .stat__label {

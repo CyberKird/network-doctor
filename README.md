@@ -4,7 +4,7 @@ A desktop app for diagnosing and fixing internet problems without digging throug
 
 ![Network Doctor](.github/screenshot.png)
 
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/joltarise)
+[![Support me on Ko-fi](https://raw.githubusercontent.com/CyberKird/.github/main/assets/ko-fi-button.svg)](https://ko-fi.com/joltarise)
 
 ## What it does
 

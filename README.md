@@ -48,4 +48,4 @@ The router password is saved in `~/.network-doctor.json` encoded as base64. It's
 
 ## License
 
-MIT
+Copyright (C) 2026 CyberKird. Network Doctor is free software under the [GNU General Public License v3.0 or later](LICENSE): you can read, build, share and change it, and any modified version you distribute must stay open under the same license.

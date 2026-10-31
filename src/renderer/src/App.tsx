@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppSettings, PlatformInfo, ThemeMode } from '../../shared/types'
+import type { AppSettings, PlatformInfo, ThemeMode, UpdateState } from '../../shared/types'
 import Tabs from './components/Tabs'
 import Home from './screens/Home'
 import Diagnostics from './screens/Diagnostics'
@@ -28,6 +28,7 @@ export default function App() {
   const [info, setInfo] = useState<PlatformInfo | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [online, setOnline] = useState<boolean | null>(null)
+  const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
   const nextId = useRef(0)
 
   const notify = useCallback((text: string, kind: Toast['kind'] = 'success') => {
@@ -41,13 +42,31 @@ export default function App() {
     window.api.getSettings().then(setSettings)
   }, [])
 
-  useEffect(
-    () =>
-      window.api.onUpdateAvailable((version) =>
-        notify(`Versiunea ${version} este disponibilă - vezi Setări`, 'warning'),
-      ),
-    [notify],
-  )
+  useEffect(() => {
+    void window.api.getUpdateState().then(setUpdate)
+    return window.api.onUpdateState((next) => {
+      setUpdate(next)
+      if (next.status === 'available') {
+        notify(`Versiunea ${next.version} este disponibilă - vezi Setări`, 'warning')
+      }
+    })
+  }, [notify])
+
+  // Ctrl+1..5 jump between tabs, in the order they appear.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return
+      const target = TABS[Number(e.key) - 1]
+      if (target) {
+        e.preventDefault()
+        setTab(target)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const updateReady = update.status === 'available' || update.status === 'ready'
 
   // The renderer follows the OS when the theme is "system", so the class has to
   // react to the media query rather than only to the stored setting.
@@ -85,6 +104,11 @@ export default function App() {
         <div className="brand">
           <h1 className="brand__name">Network Doctor</h1>
           <span className="brand__meta">v{info?.version ?? '—'}</span>
+          {updateReady && (
+            <button type="button" className="update-pill" onClick={() => setTab('Setări')}>
+              {update.status === 'ready' ? 'Gata de instalat' : `Versiune nouă ${update.version}`}
+            </button>
+          )}
         </div>
 
         <div className="row">
@@ -106,7 +130,13 @@ export default function App() {
         {tab === 'Unelte' && <Tools notify={notify} isAdmin={info?.isAdmin ?? false} />}
         {tab === 'Adaptoare' && <Adapters notify={notify} platform={info?.platform ?? null} />}
         {tab === 'Setări' && settings && (
-          <Settings settings={settings} onChange={setSettings} notify={notify} info={info} />
+          <Settings
+            settings={settings}
+            onChange={setSettings}
+            notify={notify}
+            info={info}
+            update={update}
+          />
         )}
       </main>
 

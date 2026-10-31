@@ -1,10 +1,17 @@
 import { useState } from 'react'
-import type { AppSettings, MotionMode, PlatformInfo, ThemeMode } from '../../../shared/types'
+import type {
+  AppSettings,
+  MotionMode,
+  PlatformInfo,
+  ThemeMode,
+  UpdateState,
+} from '../../../shared/types'
 import type { Toast } from '../App'
 
 interface Props {
   settings: AppSettings
   info: PlatformInfo | null
+  update: UpdateState
   onChange: (settings: AppSettings) => void
   notify: (text: string, kind?: Toast['kind']) => void
 }
@@ -47,7 +54,26 @@ function EyeIcon({ off }: { off: boolean }) {
   )
 }
 
-export default function Settings({ settings, info, onChange, notify }: Props) {
+function updateText(update: UpdateState): string {
+  switch (update.status) {
+    case 'checking':
+      return 'Caut o versiune nouă…'
+    case 'none':
+      return 'Ai ultima versiune.'
+    case 'available':
+      return `Versiunea ${update.version} este disponibilă.`
+    case 'downloading':
+      return `Se descarcă versiunea ${update.version}… ${update.percent}%`
+    case 'ready':
+      return `Versiunea ${update.version} e descărcată. Repornește aplicația ca să o instalezi.`
+    case 'error':
+      return update.message
+    default:
+      return 'Verifică dacă există o versiune mai nouă.'
+  }
+}
+
+export default function Settings({ settings, info, update, onChange, notify }: Props) {
   const [password, setPassword] = useState('')
   const [revealed, setRevealed] = useState(false)
 
@@ -160,6 +186,44 @@ export default function Settings({ settings, info, onChange, notify }: Props) {
             aria-label="Verifică actualizările"
             onClick={() => void toggleAutoUpdate()}
           />
+        </div>
+
+        <div className="setting-row">
+          <div className="setting-row__text">
+            <h3>Actualizare</h3>
+            <p>{updateText(update)}</p>
+            {update.status === 'downloading' && (
+              <div className="progress" role="progressbar" aria-valuenow={update.percent}>
+                <div className="progress__fill" style={{ width: `${update.percent}%` }} />
+              </div>
+            )}
+          </div>
+          {update.status === 'available' ? (
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => void window.api.downloadUpdate()}
+            >
+              Descarcă
+            </button>
+          ) : update.status === 'ready' ? (
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => void window.api.installUpdate()}
+            >
+              Repornește și instalează
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              disabled={update.status === 'checking' || update.status === 'downloading'}
+              onClick={() => void window.api.checkForUpdates()}
+            >
+              Verifică acum
+            </button>
+          )}
         </div>
 
         <div className="setting-row">

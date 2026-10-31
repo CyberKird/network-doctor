@@ -1,6 +1,5 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, ipcMain, nativeTheme, shell } from 'electron'
-import electronUpdater from 'electron-updater'
 import type {
   AdapterActionResult,
   AdapterView,
@@ -8,6 +7,7 @@ import type {
   PlatformInfo,
   ThemeMode,
   ToolRunResult,
+  UpdateState,
 } from '../shared/types'
 import {
   boostScript,
@@ -17,8 +17,9 @@ import {
   runElevatedPs,
   toggleScript,
 } from './net/adapters'
-import { TOOLS, gatewayAddress, platform, toolsForThisPlatform } from './net/capabilities'
-import { runDiagnostics } from './net/diagnostics'
+import { TOOLS, forgetRoute, gatewayAddress, platform, toolsForThisPlatform } from './net/capabilities'
+import { quickCheck, runDiagnostics } from './net/diagnostics'
+import { benchmarkDns } from './net/dnsbench'
 import { isIpAddress, run, runElevated } from './net/exec'
 import { measureDownload } from './net/speedtest'
 import * as store from './store'
@@ -66,13 +67,19 @@ function createWindow(): void {
   }
 }
 
-async function isAdmin(): Promise<boolean> {
-  if (platform === 'win32') {
-    // `net session` needs elevation; its exit code is the cheapest probe.
-    const { ok } = await run('net session', 5000)
-    return ok
-  }
-  return typeof process.getuid === 'function' && process.getuid() === 0
+/** Elevation cannot change while the process runs, so the probe runs once. */
+let adminProbe: Promise<boolean> | null = null
+
+function isAdmin(): Promise<boolean> {
+  adminProbe ??= (async () => {
+    if (platform === 'win32') {
+      // `net session` needs elevation; its exit code is the cheapest probe.
+      const { ok } = await run('net session', 5000)
+      return ok
+    }
+    return typeof process.getuid === 'function' && process.getuid() === 0
+  })()
+  return adminProbe
 }
 
 function applyTheme(mode: ThemeMode): void {
@@ -93,6 +100,7 @@ async function adapterAction(
   }
   try {
     const r = await work(name)
+    forgetRoute()
     if (r.ok) return { ok: true, message: r.done }
     return { ok: false, message: r.declined ? 'Anulat - nu ai confirmat cererea de administrator' : 'Nu a mers - încearcă din nou' }
   } catch (err) {
@@ -109,6 +117,8 @@ function registerIpc(): void {
 
   ipcMain.handle('diagnostics:run', () => runDiagnostics())
   ipcMain.handle('network:gateway', () => gatewayAddress())
+  ipcMain.handle('network:quick', (_e, fresh: unknown) => quickCheck(fresh === true))
+  ipcMain.handle('dns:benchmark', () => benchmarkDns())
   ipcMain.handle('tools:list', () => toolsForThisPlatform())
 
   ipcMain.handle('tools:run', async (_e, id: unknown): Promise<ToolRunResult> => {
@@ -122,6 +132,8 @@ function registerIpc(): void {
     try {
       const command = await entry.build()
       const result = entry.elevated ? await runElevated(command) : await run(command)
+      // Repairs can change the interface or gateway, so the cached route is stale.
+      forgetRoute()
       return result.ok
         ? { ok: true, message: `${spec.label} - gata` }
         : {
@@ -196,6 +208,21 @@ function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('update:state', (): UpdateState => updateState)
+  ipcMain.handle('update:check', () => checkForUpdates())
+  ipcMain.handle('update:download', async () => {
+    if (updateState.status !== 'available') return
+    try {
+      setUpdateState({ status: 'downloading', version: updateState.version, percent: 0 })
+      await (await getUpdater()).downloadUpdate()
+    } catch {
+      /* reported through the updater's error event */
+    }
+  })
+  ipcMain.handle('update:install', async () => {
+    if (updateState.status === 'ready') (await getUpdater()).quitAndInstall(false, true)
+  })
+
   ipcMain.handle('speed:cancel', () => {
     speedAbort?.abort()
     speedAbort = null
@@ -260,29 +287,78 @@ function registerIpc(): void {
 }
 
 /**
- * Update check against the project's GitHub releases.
+ * In-app updates, from the project's GitHub releases.
  *
- * Only meaningful in a packaged build - a dev run has no app-update.yml, and
- * a network failure here must never be allowed to take the app down with it.
+ * electron-updater is loaded on first use rather than at startup - it pulls in
+ * a good deal of code that the first paint does not need. It only works in a
+ * packaged build (a dev run has no app-update.yml), and a network failure must
+ * never take the app down, so every outcome is reported as state instead of
+ * thrown.
  */
-function checkForUpdates(): void {
-  if (!app.isPackaged || !store.getAutoUpdate()) return
-  const { autoUpdater } = electronUpdater
-  autoUpdater.autoDownload = false
-  autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update:available', info.version)
+type Updater = (typeof import('electron-updater'))['autoUpdater']
+let updaterPromise: Promise<Updater> | null = null
+let updateState: UpdateState = { status: 'idle' }
+
+function setUpdateState(next: UpdateState): void {
+  updateState = next
+  mainWindow?.webContents.send('update:state', next)
+}
+
+function getUpdater(): Promise<Updater> {
+  updaterPromise ??= import('electron-updater').then((mod) => {
+    const autoUpdater = (mod.default ?? mod).autoUpdater
+    // The user decides when to download and when to restart.
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
+    autoUpdater.on('checking-for-update', () => setUpdateState({ status: 'checking' }))
+    autoUpdater.on('update-available', (info) =>
+      setUpdateState({ status: 'available', version: info.version }),
+    )
+    autoUpdater.on('update-not-available', () => setUpdateState({ status: 'none' }))
+    autoUpdater.on('download-progress', (p) => {
+      if (updateState.status === 'downloading') {
+        setUpdateState({
+          status: 'downloading',
+          version: updateState.version,
+          percent: Math.round(p.percent),
+        })
+      }
+    })
+    autoUpdater.on('update-downloaded', (info) =>
+      setUpdateState({ status: 'ready', version: info.version }),
+    )
+    autoUpdater.on('error', (err) =>
+      setUpdateState({
+        status: 'error',
+        message: err?.message?.split('\n')[0] ?? 'Actualizarea a eșuat',
+      }),
+    )
+    return autoUpdater
   })
-  autoUpdater.on('error', () => {
-    /* offline, rate-limited, or no release yet - not worth interrupting for */
-  })
-  void autoUpdater.checkForUpdates()
+  return updaterPromise
+}
+
+async function checkForUpdates(): Promise<void> {
+  if (!app.isPackaged) {
+    setUpdateState({
+      status: 'error',
+      message: 'Actualizările funcționează doar în versiunea instalată',
+    })
+    return
+  }
+  try {
+    await (await getUpdater()).checkForUpdates()
+  } catch {
+    /* already reported through the updater's own error event */
+  }
 }
 
 app.whenReady().then(() => {
   applyTheme(store.getTheme())
   registerIpc()
   createWindow()
-  checkForUpdates()
+  // Well after first paint, so it never competes with startup.
+  if (app.isPackaged && store.getAutoUpdate()) setTimeout(() => void checkForUpdates(), 4000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

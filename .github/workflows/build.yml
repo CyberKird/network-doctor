@@ -55,15 +55,17 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}
-          # Only the per-architecture installers. electron-builder also emits a
-          # combined x64+arm64 .exe of nearly double the size, which nobody
-          # needs once both single-arch builds are published.
+          # The latest*.yml manifests are what the in-app updater reads; without
+          # them it never finds a new version. latest.yml lists the combined
+          # x64+arm64 .exe as well as the per-architecture ones, so that file has
+          # to be published too or the updater can be sent to a 404.
           path: |
-            release/*-x64.exe
-            release/*-arm64.exe
+            release/*.exe
+            release/*.exe.blockmap
             release/*.dmg
             release/*.AppImage
             release/*.deb
+            release/latest*.yml
           if-no-files-found: error
 
   release:

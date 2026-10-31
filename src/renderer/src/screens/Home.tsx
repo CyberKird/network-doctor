@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import HeroButton from '../components/HeroButton'
 import { useCountUp } from '../hooks/useCountUp'
+import type { QuickReport } from '../../../shared/types'
 import type { Toast } from '../App'
+
+/** Last result, so coming back to Home shows numbers at once and refreshes behind them. */
+let lastQuick: QuickReport | null = null
 
 interface Props {
   notify: (text: string, kind?: Toast['kind']) => void
@@ -16,9 +20,9 @@ interface Stat {
 }
 
 export default function Home({ notify, onOnlineChange }: Props) {
-  const [gateway, setGateway] = useState<string | null>(null)
-  const [routerMs, setRouterMs] = useState<number | null>(null)
-  const [internetMs, setInternetMs] = useState<number | null>(null)
+  const [gateway, setGateway] = useState<string | null>(lastQuick?.gateway ?? null)
+  const [routerMs, setRouterMs] = useState<number | null>(lastQuick?.routerMs ?? null)
+  const [internetMs, setInternetMs] = useState<number | null>(lastQuick?.internetMs ?? null)
   const [mbps, setMbps] = useState<number | null>(null)
   const [testing, setTesting] = useState(false)
   const [opening, setOpening] = useState(false)
@@ -31,14 +35,20 @@ export default function Home({ notify, onOnlineChange }: Props) {
     }
   }, [])
 
-  const refresh = useCallback(async () => {
-    const report = await window.api.runDiagnostics()
-    if (!alive.current) return
-    setGateway(report.gateway)
-    setRouterMs(report.pings.find((p) => p.label === 'Router')?.ms ?? null)
-    setInternetMs(report.pings.find((p) => p.label === 'Cloudflare')?.ms ?? null)
-    onOnlineChange(report.online)
-  }, [onOnlineChange])
+  // Home only needs two latencies, so it asks for just those. "Reverifică" is the
+  // user asking for a fresh look, which also bypasses the cached route.
+  const refresh = useCallback(
+    async (fresh = false) => {
+      const report = await window.api.quickCheck(fresh)
+      lastQuick = report
+      if (!alive.current) return
+      setGateway(report.gateway)
+      setRouterMs(report.routerMs)
+      setInternetMs(report.internetMs)
+      onOnlineChange(report.online)
+    },
+    [onOnlineChange],
+  )
 
   useEffect(() => {
     void refresh()
@@ -144,7 +154,7 @@ export default function Home({ notify, onOnlineChange }: Props) {
               Test viteză
             </button>
           )}
-          <button type="button" className="btn btn--block" onClick={() => void refresh()}>
+          <button type="button" className="btn btn--block" onClick={() => void refresh(true)}>
             Reverifică
           </button>
         </div>

@@ -6,8 +6,11 @@ import type {
   DiagnosticsReport,
   MotionMode,
   PlatformInfo,
+  DnsBenchmarkRow,
+  QuickReport,
   SpeedProgress,
   ThemeMode,
+  UpdateState,
   ToolRunResult,
   ToolView,
 } from '../shared/types'
@@ -21,6 +24,8 @@ const api = {
   getPlatformInfo: (): Promise<PlatformInfo> => ipcRenderer.invoke('platform:info'),
   runDiagnostics: (): Promise<DiagnosticsReport> => ipcRenderer.invoke('diagnostics:run'),
   getGateway: (): Promise<string | null> => ipcRenderer.invoke('network:gateway'),
+  quickCheck: (fresh = false): Promise<QuickReport> => ipcRenderer.invoke('network:quick', fresh),
+  benchmarkDns: (): Promise<DnsBenchmarkRow[]> => ipcRenderer.invoke('dns:benchmark'),
 
   listTools: (): Promise<ToolView[]> => ipcRenderer.invoke('tools:list'),
   runTool: (id: string): Promise<ToolRunResult> => ipcRenderer.invoke('tools:run', id),
@@ -42,10 +47,14 @@ const api = {
     return () => ipcRenderer.removeListener('speed:progress', listener)
   },
 
-  onUpdateAvailable: (cb: (version: string) => void): (() => void) => {
-    const listener = (_e: unknown, version: string): void => cb(version)
-    ipcRenderer.on('update:available', listener)
-    return () => ipcRenderer.removeListener('update:available', listener)
+  getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke('update:state'),
+  checkForUpdates: (): Promise<void> => ipcRenderer.invoke('update:check'),
+  downloadUpdate: (): Promise<void> => ipcRenderer.invoke('update:download'),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  onUpdateState: (cb: (state: UpdateState) => void): (() => void) => {
+    const listener = (_e: unknown, state: UpdateState): void => cb(state)
+    ipcRenderer.on('update:state', listener)
+    return () => ipcRenderer.removeListener('update:state', listener)
   },
 
   openRouter: (): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke('router:open'),

@@ -35,6 +35,15 @@ export interface DefaultRoute {
 }
 
 /**
+ * Resolving the route spawns PowerShell on Windows, which costs a second or
+ * more, and several things ask for it at once (home, diagnostics, every repair
+ * tool). Sharing one answer for a few seconds - including the lookup still in
+ * flight - turns that into a single spawn.
+ */
+const ROUTE_TTL_MS = 8_000
+let routeCache: { at: number; value: Promise<DefaultRoute | null> } | null = null
+
+/**
  * The route the OS would actually send traffic over, as one answer.
  *
  * Interface and gateway have to come from the same route or they can end up
@@ -47,7 +56,23 @@ export interface DefaultRoute {
  * Virtual adapters need no special handling: a VPN only wins if it genuinely
  * owns the best default route, which is exactly the right answer.
  */
-export async function defaultRoute(): Promise<DefaultRoute | null> {
+export async function defaultRoute(fresh = false): Promise<DefaultRoute | null> {
+  if (!fresh && routeCache && Date.now() - routeCache.at < ROUTE_TTL_MS) return routeCache.value
+  const value = lookupDefaultRoute()
+  routeCache = { at: Date.now(), value }
+  // A failed lookup is not worth remembering - the next caller should retry.
+  void value.then((v) => {
+    if (!v && routeCache?.value === value) routeCache = null
+  })
+  return value
+}
+
+/** Call after anything that can change the network, so the next lookup is real. */
+export function forgetRoute(): void {
+  routeCache = null
+}
+
+async function lookupDefaultRoute(): Promise<DefaultRoute | null> {
   const cmd: Record<Platform, string> = {
     win32:
       'powershell -NoProfile -Command "Get-NetRoute -DestinationPrefix \'0.0.0.0/0\'' +

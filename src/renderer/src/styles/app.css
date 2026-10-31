@@ -277,10 +277,12 @@
   color: var(--ink-faint);
 }
 
+/* Two columns: with loss and jitter under each reading the rows are taller, and a
+   single column would squeeze the IP configuration log out of the window. */
 .ping-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: var(--s3);
 }
 
 .ping-row {
@@ -557,4 +559,108 @@
   border-radius: var(--r-md);
   color: var(--ink-muted);
   font-size: var(--t-caption);
+}
+
+/* ── Update pill, progress ────────────────────────────────────── */
+.update-pill {
+  align-self: center;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background-color: var(--primary);
+  color: var(--primary-ink);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: var(--e2), var(--pop);
+  animation: breathe-soft 2.6s ease-in-out infinite;
+  transition: transform var(--d-fast) var(--ease-out);
+}
+
+.update-pill:hover {
+  transform: translateY(-1px);
+}
+
+@keyframes breathe-soft {
+  50% {
+    box-shadow: var(--e3), var(--pop), 0 0 0 4px rgb(var(--primary-glow) / 0.25);
+  }
+}
+
+.progress {
+  width: min(320px, 100%);
+  height: 8px;
+  margin-top: var(--s3);
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+  box-shadow: var(--inset);
+  overflow: hidden;
+}
+
+.progress__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary-strong);
+  transition: width var(--d-base) var(--ease-out);
+}
+
+/* ── Ping detail, DNS benchmark ───────────────────────────────── */
+.ping-row__value {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.ping-row__detail {
+  font-family: var(--font);
+  font-size: var(--t-micro);
+  font-weight: 500;
+  color: var(--ink-faint);
+}
+
+.dns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  flex: none;
+}
+
+.dns__title {
+  margin: 0;
+  font-size: var(--t-body);
+  font-weight: 650;
+}
+
+.dns__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s3);
+}
+
+.dns__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-md);
+  background-color: var(--surface);
+  background-image: var(--sheen);
+  box-shadow: var(--e2), var(--pop);
+  animation: rise-in var(--d-base) var(--ease-out) backwards;
+}
+
+.dns__cell--best {
+  box-shadow: var(--e3), var(--pop), 0 0 0 2px var(--primary);
+}
+
+.dns__ms {
+  font-size: var(--t-h2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dns__note {
+  font-size: var(--t-micro);
+  color: var(--ink-faint);
 }

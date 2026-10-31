@@ -2,6 +2,11 @@ appId: com.cyberkird.networkdoctor
 productName: Network Doctor
 copyright: MIT
 
+# One hyphenated name for every target. GitHub turns spaces in asset names into
+# dots, and the update manifests (latest*.yml) must name the file exactly as it
+# is published or the updater downloads a 404.
+artifactName: Network-Doctor-${version}-${arch}.${ext}
+
 directories:
   output: release
   buildResources: build
@@ -25,9 +30,8 @@ win:
   signAndEditExecutable: true
 
 nsis:
-  # Without an ${arch} in the name, both architectures land in one 186 MB
-  # installer and every user downloads the half they cannot run.
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  # The ${arch} in the shared artifactName keeps the two architectures in
+  # separate installers, so nobody downloads the half they cannot run.
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

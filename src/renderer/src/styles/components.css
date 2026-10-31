@@ -204,18 +204,20 @@
 
 .tabs__pill {
   position: absolute;
+  left: 0;
   top: var(--s1);
   bottom: var(--s1);
   border-radius: var(--r-pill);
   background-color: var(--primary);
   background-image: var(--sheen);
   /* Sits in a groove, so it needs enough elevation to clear the inset walls. */
-  box-shadow: var(--e3), var(--pop);
-  /* Driven by left/width from React state; the compositor interpolates these
-     against the display's refresh, so no manual frame pacing is needed. */
+  box-shadow: var(--e3), var(--pop), 0 8px 18px -8px rgb(var(--primary-glow) / 0.8);
+  /* Position comes from React state as a transform, so the glide runs on the
+     compositor and never triggers layout. The soft teal under-glow is what
+     lifts it off the groove. */
   transition:
-    left var(--d-base) var(--ease-out),
-    width var(--d-base) var(--ease-out);
+    transform var(--d-slow) var(--ease-glide),
+    width var(--d-slow) var(--ease-glide);
 }
 
 .tabs__tab {
@@ -230,7 +232,17 @@
   font-weight: 650;
   color: var(--ink-muted);
   cursor: pointer;
-  transition: color var(--d-base) var(--ease-out);
+  transition:
+    color var(--d-base) var(--ease-out),
+    transform var(--d-fast) var(--ease-out);
+}
+
+.tabs__tab:hover:not([aria-selected='true']) {
+  color: var(--ink);
+}
+
+.tabs__tab:active {
+  transform: scale(0.96);
 }
 
 .tabs__tab[aria-selected='true'] {

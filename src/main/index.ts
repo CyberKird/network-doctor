@@ -1,7 +1,22 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, ipcMain, nativeTheme, shell } from 'electron'
 import electronUpdater from 'electron-updater'
-import type { AppSettings, PlatformInfo, ThemeMode, ToolRunResult } from '../shared/types'
+import type {
+  AdapterActionResult,
+  AdapterView,
+  AppSettings,
+  PlatformInfo,
+  ThemeMode,
+  ToolRunResult,
+} from '../shared/types'
+import {
+  boostScript,
+  listAdapters,
+  readBoostPlan,
+  revertScript,
+  runElevatedPs,
+  toggleScript,
+} from './net/adapters'
 import { TOOLS, gatewayAddress, platform, toolsForThisPlatform } from './net/capabilities'
 import { runDiagnostics } from './net/diagnostics'
 import { isIpAddress, run, runElevated } from './net/exec'
@@ -64,6 +79,27 @@ function applyTheme(mode: ThemeMode): void {
   nativeTheme.themeSource = mode
 }
 
+/** Adapter names the renderer was last shown. Actions only accept those. */
+let knownAdapters = new Set<string>()
+
+/** Shared guard + outcome wording for the adapter handlers. */
+async function adapterAction(
+  name: unknown,
+  work: (name: string) => Promise<{ ok: boolean; declined: boolean; done: string }>,
+): Promise<AdapterActionResult> {
+  if (platform !== 'win32') return { ok: false, message: 'Disponibil doar pe Windows' }
+  if (typeof name !== 'string' || !knownAdapters.has(name)) {
+    return { ok: false, message: 'Adaptor necunoscut' }
+  }
+  try {
+    const r = await work(name)
+    if (r.ok) return { ok: true, message: r.done }
+    return { ok: false, message: r.declined ? 'Anulat - nu ai confirmat cererea de administrator' : 'Nu a mers - încearcă din nou' }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('platform:info', async (): Promise<PlatformInfo> => ({
     platform,
@@ -96,6 +132,49 @@ function registerIpc(): void {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
   })
+
+  // Adapter control is Windows-only: the list comes from the NetAdapter
+  // module, and the driver settings it edits have no counterpart elsewhere.
+  ipcMain.handle('adapters:list', async (): Promise<AdapterView[]> => {
+    if (platform !== 'win32') return []
+    const boosted = new Set(store.getBoostedAdapters())
+    const adapters = await listAdapters()
+    knownAdapters = new Set(adapters.map((a) => a.name))
+    return adapters.map((a) => ({ ...a, boosted: boosted.has(a.name) }))
+  })
+
+  ipcMain.handle(
+    'adapters:toggle',
+    (_e, name: unknown, enable: unknown): Promise<AdapterActionResult> =>
+      adapterAction(name, async (n) => {
+        const on = Boolean(enable)
+        const r = await runElevatedPs(toggleScript(n, on))
+        return { ...r, done: on ? `${n} activat` : `${n} dezactivat` }
+      }),
+  )
+
+  ipcMain.handle(
+    'adapters:boost',
+    (_e, name: unknown): Promise<AdapterActionResult> =>
+      adapterAction(name, async (n) => {
+        const plan = await readBoostPlan(n)
+        const r = await runElevatedPs(boostScript(n, plan))
+        if (r.ok) store.setBoost(n, plan.map((c) => [c.setting, c.from]))
+        return { ...r, done: `Boost aplicat pe ${n}` }
+      }),
+  )
+
+  ipcMain.handle(
+    'adapters:revert',
+    (_e, name: unknown): Promise<AdapterActionResult> =>
+      adapterAction(name, async (n) => {
+        const saved = store.getBoost(n)
+        if (!saved) return { ok: false, declined: false, code: null, done: '' }
+        const r = await runElevatedPs(revertScript(n, saved))
+        if (r.ok) store.setBoost(n, undefined)
+        return { ...r, done: `Setările inițiale ale ${n} au fost restaurate` }
+      }),
+  )
 
   // Resolves to the measured Mb/s, or null when the user stopped it. Cancelling
   // is a normal outcome, so it must not surface as a rejected invoke that the

@@ -30,6 +30,25 @@ export interface ToolRunResult {
   message: string
 }
 
+export type AdapterKind = 'wifi' | 'ethernet'
+export type AdapterStatus = 'up' | 'disconnected' | 'disabled'
+
+export interface AdapterView {
+  name: string
+  description: string
+  kind: AdapterKind
+  status: AdapterStatus
+  /** Link speed while connected, e.g. "1 Gbps"; empty otherwise. */
+  speed: string
+  /** A performance boost is applied and can be reverted. */
+  boosted: boolean
+}
+
+export interface AdapterActionResult {
+  ok: boolean
+  message: string
+}
+
 export interface SpeedProgress {
   mbps: number
   bytes: number

@@ -9,6 +9,8 @@ interface StoredConfig {
   autoUpdate: boolean
   /** Router password, encrypted by the OS keystore. Base64 of the cipher text. */
   routerPassword?: string
+  /** Per adapter, the driver values from before a boost: [setting, value] pairs. */
+  boosts?: Record<string, Array<[string, string]>>
 }
 
 const DEFAULTS: StoredConfig = { theme: 'system', motion: 'system', autoUpdate: true }
@@ -95,6 +97,21 @@ export function getRouterPassword(): string | null {
   } catch {
     return null
   }
+}
+
+export function getBoost(adapter: string): Array<[string, string]> | undefined {
+  return load().boosts?.[adapter]
+}
+
+export function getBoostedAdapters(): string[] {
+  return Object.keys(load().boosts ?? {})
+}
+
+export function setBoost(adapter: string, previous: Array<[string, string]> | undefined): void {
+  const boosts = { ...load().boosts }
+  if (previous) boosts[adapter] = previous
+  else delete boosts[adapter]
+  persist({ ...load(), boosts })
 }
 
 export function configFileExists(): boolean {

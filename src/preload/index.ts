@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AdapterActionResult,
+  AdapterView,
   AppSettings,
   DiagnosticsReport,
   MotionMode,
@@ -22,6 +24,14 @@ const api = {
 
   listTools: (): Promise<ToolView[]> => ipcRenderer.invoke('tools:list'),
   runTool: (id: string): Promise<ToolRunResult> => ipcRenderer.invoke('tools:run', id),
+
+  listAdapters: (): Promise<AdapterView[]> => ipcRenderer.invoke('adapters:list'),
+  setAdapterEnabled: (name: string, enable: boolean): Promise<AdapterActionResult> =>
+    ipcRenderer.invoke('adapters:toggle', name, enable),
+  boostAdapter: (name: string): Promise<AdapterActionResult> =>
+    ipcRenderer.invoke('adapters:boost', name),
+  revertAdapter: (name: string): Promise<AdapterActionResult> =>
+    ipcRenderer.invoke('adapters:revert', name),
 
   /** Mb/s, or null if the user stopped the test. */
   startSpeedTest: (): Promise<number | null> => ipcRenderer.invoke('speed:start'),

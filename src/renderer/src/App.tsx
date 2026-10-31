@@ -4,9 +4,10 @@ import Tabs from './components/Tabs'
 import Home from './screens/Home'
 import Diagnostics from './screens/Diagnostics'
 import Tools from './screens/Tools'
+import Adapters from './screens/Adapters'
 import Settings from './screens/Settings'
 
-const TABS = ['Acasă', 'Diagnostic', 'Unelte', 'Setări'] as const
+const TABS = ['Acasă', 'Diagnostic', 'Unelte', 'Adaptoare', 'Setări'] as const
 type Tab = (typeof TABS)[number]
 
 export interface Toast {
@@ -103,6 +104,7 @@ export default function App() {
         {tab === 'Acasă' && <Home notify={notify} onOnlineChange={setOnline} />}
         {tab === 'Diagnostic' && <Diagnostics notify={notify} onOnlineChange={setOnline} />}
         {tab === 'Unelte' && <Tools notify={notify} isAdmin={info?.isAdmin ?? false} />}
+        {tab === 'Adaptoare' && <Adapters notify={notify} platform={info?.platform ?? null} />}
         {tab === 'Setări' && settings && (
           <Settings settings={settings} onChange={setSettings} notify={notify} info={info} />
         )}

@@ -37,7 +37,11 @@ export default function Tabs<T extends string>({ tabs, active, onChange }: Props
     <div className="tabs" role="tablist" ref={listRef}>
       <span
         className="tabs__pill"
-        style={pill ? { left: pill.left, width: pill.width } : { opacity: 0 }}
+        style={
+          pill
+            ? { transform: `translateX(${pill.left}px)`, width: pill.width }
+            : { opacity: 0 }
+        }
         aria-hidden="true"
       />
       {tabs.map((tab) => (

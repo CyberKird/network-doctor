@@ -432,3 +432,129 @@
     transform: translateY(12px) scale(0.97);
   }
 }
+
+/* ── Adapters ─────────────────────────────────────────────────── */
+.adapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-height: 0;
+  /* Room for the elevation shadows, which overflow the list's own box. */
+  margin: calc(var(--s3) * -1);
+  padding: var(--s3);
+  overflow-y: auto;
+}
+
+.adapter {
+  flex: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s4) var(--s5);
+  transition: box-shadow var(--d-base) var(--ease-out);
+}
+
+.adapter:hover {
+  box-shadow: var(--e3), var(--pop);
+}
+
+/* The icon sits in a pressed-in well, the one concave shape on a raised card. */
+.adapter__icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  box-shadow: var(--inset);
+  color: var(--ink-faint);
+  transition: color var(--d-slow) var(--ease-out);
+}
+
+.adapter[data-status='up'] .adapter__icon {
+  color: var(--primary-strong);
+}
+
+.adapter__info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.adapter__name {
+  font-size: var(--t-body);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.adapter__desc {
+  color: var(--ink-muted);
+  font-size: var(--t-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s1);
+  font-size: var(--t-caption);
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.adapter__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  transition: background-color var(--d-slow) var(--ease-out);
+}
+
+.adapter[data-status='up'] .adapter__dot {
+  background: var(--primary-strong);
+}
+
+.adapter[data-status='disconnected'] .adapter__dot {
+  background: var(--warning);
+}
+
+.adapter[data-status='busy'] .adapter__dot {
+  background: var(--warning);
+  animation: breathe 1.1s ease-in-out infinite;
+}
+
+.adapter[data-status='disabled'] .adapter__name,
+.adapter[data-status='disabled'] .adapter__desc {
+  opacity: 0.55;
+}
+
+.adapter__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+}
+
+.adapter__badge {
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--primary-ink);
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  background: var(--primary);
+  box-shadow: var(--e1), var(--pop);
+}
+
+.adapters__note {
+  margin: 0;
+  padding: var(--s4) var(--s5);
+  border-radius: var(--r-md);
+  color: var(--ink-muted);
+  font-size: var(--t-caption);
+}
